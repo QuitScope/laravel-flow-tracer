@@ -878,6 +878,14 @@ class FlowTraceCommand extends Command
                 $this->line("   Internal method calls: " . count($flow['internal_analysis']['method_calls']));
                 foreach (array_slice($flow['internal_analysis']['method_calls'], 0, 3) as $call) {
                     $this->line("     - {$call['type']}: " . ($call['call'] ?? 'unknown'));
+                    
+                    // Debug why this might not be considered a dependency
+                    $isActual = $this->isActualDependency($call);
+                    $target = $call['class'] ?? $call['target'] ?? $call['variable'] ?? null;
+                    $isValid = $target ? $this->isValidDependency($target) : false;
+                    $this->line("       → isActual: " . ($isActual ? 'YES' : 'NO') . 
+                              ", target: " . ($target ?? 'NONE') . 
+                              ", isValid: " . ($isValid ? 'YES' : 'NO'));
                 }
             }
         }
@@ -1625,16 +1633,37 @@ class FlowTraceCommand extends Command
             foreach ($flow['internal_analysis']['method_calls'] as $call) {
                 // Only include calls that represent actual dependencies
                 if ($this->isActualDependency($call)) {
-                    $target = $call['class'] ?? $call['target'] ?? null;
+                    $target = $call['class'] ?? $call['target'] ?? $call['variable'] ?? null;
+                    
+                    // Special handling for App Helper calls
+                    if ($call['type'] === 'App Helper' && isset($call['class'])) {
+                        $target = $call['class'];
+                    }
+                    
                     if ($target && $this->isValidDependency($target)) {
                         $connections[] = [
                             'target' => $target,
                             'type' => 'method_call',
                             'call_type' => $call['type'],
                             'method' => $call['method'] ?? $call['function'] ?? 'unknown',
-                            'evidence' => $call['call'] ?? 'unknown'  // Add evidence for debugging
+                            'evidence' => $call['call'] ?? 'unknown'
                         ];
                     }
+                }
+            }
+        }
+        
+        // Also check internal_calls from the analysis
+        if (isset($flow['internal_analysis']) && !empty($flow['internal_analysis']['internal_calls'])) {
+            foreach ($flow['internal_analysis']['internal_calls'] as $call) {
+                if (isset($call['class']) && $this->isValidDependency($call['class'])) {
+                    $connections[] = [
+                        'target' => $call['class'],
+                        'type' => 'internal_call',
+                        'call_type' => $call['type'],
+                        'method' => $call['method'] ?? '__construct',
+                        'evidence' => $call['call'] ?? 'unknown'
+                    ];
                 }
             }
         }
