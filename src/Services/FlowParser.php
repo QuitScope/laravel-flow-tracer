@@ -40,9 +40,14 @@ class FlowParser
                 break;
             case 'controller':
                 $flow = $this->parseFromController($startPoint, $flow);
-                // Füge Information hinzu welche Controller/Routes diese Action verwenden
+                
+                // Automatisch Actions und Controller-Beziehungen hinzufügen
                 if (str_contains($startPoint, 'Action')) {
+                    // Bei Actions: Zeige welche Controller diese Action verwenden
                     $flow['called_from'] = $this->findActionCallers($startPoint);
+                } else if (str_contains($startPoint, 'Controller')) {
+                    // Bei Controllern: Zeige welche Actions verwendet werden
+                    $flow['uses_actions'] = $this->findControllerActions($startPoint);
                 }
                 break;
         }
@@ -558,5 +563,121 @@ class FlowParser
         }
         
         return $callers;
+    }
+
+    private function findControllerActions(string $controllerClass): array
+    {
+        $actions = [];
+        
+        try {
+            // Analysiere den Controller-Code
+            $controllerAnalysis = $this->codeAnalyzer->analyzeClass($controllerClass);
+            $filePath = $controllerAnalysis['file'];
+            
+            if (!$filePath || !file_exists($filePath)) {
+                return $actions;
+            }
+            
+            $content = file_get_contents($filePath);
+            
+            // Suche nach Action-Verwendungen im Controller
+            // Pattern für new ActionClass(), ActionClass::handle(), etc.
+            $patterns = [
+                '/new\s+([A-Z][a-zA-Z0-9_\\\\]*Action)\s*\(/' => 'instantiation',
+                '/([A-Z][a-zA-Z0-9_\\\\]*Action)::(handle|execute|run|perform)\s*\(/' => 'static_call',
+                '/\$([a-zA-Z0-9_]+Action)\s*->(handle|execute|run|perform)\s*\(/' => 'instance_call',
+                '/use\s+([A-Z][a-zA-Z0-9_\\\\]*Action);/' => 'import'
+            ];
+            
+            foreach ($patterns as $pattern => $type) {
+                if (preg_match_all($pattern, $content, $matches, PREG_SET_ORDER)) {
+                    foreach ($matches as $match) {
+                        $actionName = $match[1];
+                        
+                        // Bei instance_call ist $match[1] die Variable, nicht die Klasse
+                        if ($type === 'instance_call') {
+                            // Versuche die Klasse aus der Variable-Definition zu finden
+                            $varPattern = "/\\\${$actionName}\s*=\s*new\s+([A-Z][a-zA-Z0-9_\\\\]*Action)/";
+                            if (preg_match($varPattern, $content, $varMatch)) {
+                                $actionName = $varMatch[1];
+                            } else {
+                                continue; // Skip wenn wir die Klasse nicht bestimmen können
+                            }
+                        }
+                        
+                        // Erweitere Action-Name zu vollqualifiziertem Namen wenn nötig
+                        $fullActionName = $this->resolveActionClassName($actionName, $content);
+                        
+                        if ($fullActionName && !in_array($fullActionName, array_column($actions, 'action'))) {
+                            $actions[] = [
+                                'action' => $fullActionName,
+                                'usage_type' => $type,
+                                'method' => $match[2] ?? 'unknown'
+                            ];
+                        }
+                    }
+                }
+            }
+            
+            // Zusätzlich: Suche in Method-Dependencies
+            foreach ($controllerAnalysis['methods'] as $method) {
+                if (isset($method['source_analysis']['service_calls'])) {
+                    foreach ($method['source_analysis']['service_calls'] as $serviceCall) {
+                        if (isset($serviceCall['class']) && str_contains($serviceCall['class'], 'Action')) {
+                            $actions[] = [
+                                'action' => $serviceCall['class'],
+                                'usage_type' => 'dependency_injection',
+                                'method' => $method['name']
+                            ];
+                        }
+                    }
+                }
+            }
+            
+        } catch (\Exception $e) {
+            error_log("Error finding actions for controller {$controllerClass}: " . $e->getMessage());
+        }
+        
+        return array_unique($actions, SORT_REGULAR);
+    }
+    
+    private function resolveActionClassName(string $actionName, string $content): ?string
+    {
+        // Wenn bereits vollqualifiziert
+        if (str_contains($actionName, '\\')) {
+            return $actionName;
+        }
+        
+        // Suche nach use-Statement
+        $usePattern = "/use\s+([A-Za-z0-9_\\\\]+\\\\{$actionName});/";
+        if (preg_match($usePattern, $content, $matches)) {
+            return $matches[1];
+        }
+        
+        // Suche nach namespace und konstruiere vollqualifizierten Namen
+        if (preg_match('/namespace\s+([^;]+);/', $content, $nsMatches)) {
+            $namespace = trim($nsMatches[1]);
+            $possibleActionClass = $namespace . '\\' . $actionName;
+            
+            // Prüfe ob die Klasse existiert
+            if (class_exists($possibleActionClass)) {
+                return $possibleActionClass;
+            }
+        }
+        
+        // Versuche mit Standard-Action-Pfaden
+        $commonActionPaths = [
+            "App\\Actions\\{$actionName}",
+            "Domain\\Actions\\{$actionName}",
+            "Application\\Actions\\{$actionName}",
+        ];
+        
+        foreach ($commonActionPaths as $path) {
+            if (class_exists($path)) {
+                return $path;
+            }
+        }
+        
+        return null;
     }
 }

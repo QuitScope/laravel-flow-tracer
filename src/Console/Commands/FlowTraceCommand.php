@@ -337,6 +337,14 @@ class FlowTraceCommand extends Command
         if (isset($flow['circular_dependencies']) && !empty($flow['circular_dependencies'])) {
             $this->displayCircularDependencies($flow['circular_dependencies']);
         }
+
+        if (isset($flow['called_from']) && !empty($flow['called_from'])) {
+            $this->displayActionCallers($flow['called_from']);
+        }
+
+        if (isset($flow['uses_actions']) && !empty($flow['uses_actions'])) {
+            $this->displayControllerActions($flow['uses_actions']);
+        }
     }
 
     private function displayRouteInfo(array $route): void
@@ -673,5 +681,73 @@ class FlowTraceCommand extends Command
         } catch (\Exception $e) {
             $this->error("Failed to analyze project: " . $e->getMessage());
         }
+    }
+
+    private function displayActionCallers(array $callers): void
+    {
+        $this->info("\n📞 Called From (Controllers & Routes using this Action):");
+        $tableData = [];
+        
+        foreach ($callers as $caller) {
+            if ($caller['type'] === 'route') {
+                $tableData[] = [
+                    'Route',
+                    $caller['name'] ?? 'unnamed',
+                    $caller['uri'] ?? 'N/A',
+                    implode(', ', $caller['methods'] ?? [])
+                ];
+            } elseif ($caller['type'] === 'controller') {
+                $controllerName = class_basename($caller['class']);
+                $tableData[] = [
+                    'Controller',
+                    $controllerName,
+                    str_replace(base_path(), '', $caller['file']),
+                    'Direct Usage'
+                ];
+            }
+        }
+        
+        if (!empty($tableData)) {
+            $this->table(['Type', 'Name/Class', 'URI/File', 'Methods/Usage'], $tableData);
+        } else {
+            $this->line("  No callers found.");
+        }
+    }
+
+    private function displayControllerActions(array $actions): void
+    {
+        $this->info("\n🎬 Used Actions (Actions called by this Controller):");
+        $tableData = [];
+        
+        foreach ($actions as $action) {
+            $actionName = class_basename($action['action']);
+            $usageType = $this->formatUsageType($action['usage_type']);
+            $method = $action['method'] ?? 'N/A';
+            
+            $tableData[] = [
+                $actionName,
+                $action['action'],
+                $usageType,
+                $method
+            ];
+        }
+        
+        if (!empty($tableData)) {
+            $this->table(['Action', 'Full Class', 'Usage Type', 'Method'], $tableData);
+        } else {
+            $this->line("  No actions found.");
+        }
+    }
+
+    private function formatUsageType(string $type): string
+    {
+        return match($type) {
+            'instantiation' => 'new ActionClass()',
+            'static_call' => 'ActionClass::method()',
+            'instance_call' => '$action->method()',
+            'import' => 'use statement',
+            'dependency_injection' => 'Dependency Injection',
+            default => $type
+        };
     }
 }
