@@ -27,7 +27,9 @@ class FlowTraceCommand extends Command
                             {--no-png : Disable automatic PNG generation}
                             {--output= : Output file path for PNG}
                             {--stats : Show project statistics}
-                            {--scan= : Scan specific directory for classes}';
+                            {--scan= : Scan specific directory for classes}
+                            {--deep : Trace complete flow until no more connections found}
+                            {--max-deep=10 : Maximum depth for deep tracing (prevents infinite loops)}';
 
     protected $description = 'Trace Laravel application flow and automatically generate PNG diagrams';
 
@@ -61,6 +63,8 @@ class FlowTraceCommand extends Command
         $output = $this->option('output');
         $stats = $this->option('stats');
         $scan = $this->option('scan');
+        $deep = $this->option('deep');
+        $maxDeep = (int) $this->option('max-deep');
 
         // Handle project statistics
         if ($stats) {
@@ -103,6 +107,14 @@ class FlowTraceCommand extends Command
                         $flow['circular_dependencies'] = $this->dependencyTracer->findCircularDependencies($targetClass);
                     }
                 }
+            }
+
+            // Handle deep tracing if requested
+            if ($deep) {
+                $this->info("🔍 Starting deep trace analysis...");
+                $flow['deep_trace'] = $this->performDeepTrace($flow, $maxDeep);
+                $this->info("✅ Deep trace completed!");
+                $this->newLine();
             }
 
             // Always show flow information
@@ -344,6 +356,10 @@ class FlowTraceCommand extends Command
 
         if (isset($flow['uses_actions']) && !empty($flow['uses_actions'])) {
             $this->displayControllerActions($flow['uses_actions']);
+        }
+
+        if (isset($flow['deep_trace']) && !empty($flow['deep_trace'])) {
+            $this->displayDeepTrace($flow['deep_trace']);
         }
     }
 
@@ -748,6 +764,252 @@ class FlowTraceCommand extends Command
             'import' => 'use statement',
             'dependency_injection' => 'Dependency Injection',
             default => $type
+        };
+    }
+
+    private function performDeepTrace(array $initialFlow, int $maxDepth): array
+    {
+        $deepTrace = [
+            'levels' => [],
+            'visited_classes' => [],
+            'total_depth' => 0,
+            'cycles_detected' => [],
+            'endpoints' => []
+        ];
+
+        $this->buildDeepTrace($initialFlow, $deepTrace, 0, $maxDepth, []);
+        
+        return $deepTrace;
+    }
+
+    private function buildDeepTrace(array $flow, array &$deepTrace, int $currentDepth, int $maxDepth, array $visited): void
+    {
+        if ($currentDepth >= $maxDepth) {
+            $deepTrace['endpoints'][] = [
+                'reason' => 'max_depth_reached',
+                'depth' => $currentDepth,
+                'class' => $flow['controller'] ?? 'unknown'
+            ];
+            return;
+        }
+
+        $currentClass = $flow['controller'] ?? null;
+        if (!$currentClass) {
+            return;
+        }
+
+        // Cycle detection
+        if (in_array($currentClass, $visited)) {
+            $deepTrace['cycles_detected'][] = [
+                'cycle_path' => array_merge($visited, [$currentClass]),
+                'depth' => $currentDepth
+            ];
+            return;
+        }
+
+        $visited[] = $currentClass;
+        $deepTrace['visited_classes'][] = $currentClass;
+
+        // Initialize level if not exists
+        if (!isset($deepTrace['levels'][$currentDepth])) {
+            $deepTrace['levels'][$currentDepth] = [];
+        }
+
+        $levelData = [
+            'class' => $currentClass,
+            'action' => $flow['action'] ?? null,
+            'type' => $this->getClassType($currentClass),
+            'connections' => []
+        ];
+
+        // Find all connections from this class
+        $connections = [];
+
+        // 1. Actions used by this controller
+        if (isset($flow['uses_actions']) && !empty($flow['uses_actions'])) {
+            foreach ($flow['uses_actions'] as $actionData) {
+                $connections[] = [
+                    'target' => $actionData['action'],
+                    'type' => 'uses_action',
+                    'usage_type' => $actionData['usage_type']
+                ];
+            }
+        }
+
+        // 2. Services used
+        if (isset($flow['services']) && !empty($flow['services'])) {
+            foreach ($flow['services'] as $service) {
+                if (isset($service['class'])) {
+                    $connections[] = [
+                        'target' => $service['class'],
+                        'type' => 'uses_service',
+                        'service_type' => $service['type'] ?? 'unknown'
+                    ];
+                }
+            }
+        }
+
+        // 3. Models used
+        if (isset($flow['models']) && !empty($flow['models'])) {
+            foreach ($flow['models'] as $model) {
+                if (isset($model['class'])) {
+                    $connections[] = [
+                        'target' => $model['class'],
+                        'type' => 'uses_model',
+                        'operations' => $model['operations'] ?? []
+                    ];
+                }
+            }
+        }
+
+        $levelData['connections'] = $connections;
+        $deepTrace['levels'][$currentDepth][] = $levelData;
+
+        // Recursively trace each connection
+        foreach ($connections as $connection) {
+            $targetClass = $connection['target'];
+            
+            try {
+                // Only trace if it's a traceable class (not built-in Laravel classes)
+                if ($this->isTraceableClass($targetClass)) {
+                    $subFlow = $this->flowParser->parseFullFlow($targetClass, 'controller');
+                    $this->buildDeepTrace($subFlow, $deepTrace, $currentDepth + 1, $maxDepth, $visited);
+                }
+            } catch (\Exception $e) {
+                // Log but continue tracing
+                error_log("Deep trace error for {$targetClass}: " . $e->getMessage());
+            }
+        }
+
+        // If no connections found, this is an endpoint
+        if (empty($connections)) {
+            $deepTrace['endpoints'][] = [
+                'reason' => 'no_connections',
+                'depth' => $currentDepth,
+                'class' => $currentClass
+            ];
+        }
+
+        // Update total depth reached
+        $deepTrace['total_depth'] = max($deepTrace['total_depth'], $currentDepth);
+    }
+
+    private function isTraceableClass(string $className): bool
+    {
+        // Skip built-in Laravel/PHP classes
+        $skipPrefixes = [
+            'Illuminate\\',
+            'Symfony\\',
+            'Carbon\\',
+            'Monolog\\',
+            'Psr\\',
+            'Laravel\\',
+            'Facade\\',
+            'Mockery\\',
+            'PHPUnit\\',
+            'Exception',
+            'DateTime',
+            'stdClass'
+        ];
+
+        foreach ($skipPrefixes as $prefix) {
+            if (str_starts_with($className, $prefix)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function getClassType(string $className): string
+    {
+        if (str_contains($className, 'Controller')) return 'Controller';
+        if (str_contains($className, 'Action')) return 'Action';
+        if (str_contains($className, 'Service')) return 'Service';
+        if (str_contains($className, 'Repository')) return 'Repository';
+        if (str_contains($className, 'Model')) return 'Model';
+        if (str_contains($className, 'Query')) return 'Query';
+        if (str_contains($className, 'Handler')) return 'Handler';
+        if (str_contains($className, 'Middleware')) return 'Middleware';
+        
+        return 'Class';
+    }
+
+    private function displayDeepTrace(array $deepTrace): void
+    {
+        $this->info("\n🌊 Deep Flow Trace (Complete Flow Analysis):");
+        $this->line("═══════════════════════════════════════════════════════════");
+
+        $this->info("📊 Trace Summary:");
+        $this->table(['Metric', 'Value'], [
+            ['Total Depth Reached', $deepTrace['total_depth']],
+            ['Unique Classes Visited', count(array_unique($deepTrace['visited_classes']))],
+            ['Endpoints Found', count($deepTrace['endpoints'])],
+            ['Cycles Detected', count($deepTrace['cycles_detected'])]
+        ]);
+
+        // Display each level
+        foreach ($deepTrace['levels'] as $level => $classes) {
+            $this->info("\n📍 Level {$level}:");
+            
+            foreach ($classes as $classData) {
+                $className = class_basename($classData['class']);
+                $action = $classData['action'] ? "::{$classData['action']}" : '';
+                $type = $classData['type'];
+                
+                $this->line("  🎯 {$className}{$action} ({$type})");
+                
+                if (!empty($classData['connections'])) {
+                    $this->line("    └─ Connections:");
+                    foreach ($classData['connections'] as $connection) {
+                        $targetName = class_basename($connection['target']);
+                        $connectionType = $this->formatConnectionType($connection['type']);
+                        $this->line("       ├─ {$targetName} ({$connectionType})");
+                    }
+                }
+            }
+        }
+
+        // Display endpoints
+        if (!empty($deepTrace['endpoints'])) {
+            $this->info("\n🏁 Flow Endpoints:");
+            $tableData = [];
+            foreach ($deepTrace['endpoints'] as $endpoint) {
+                $reason = $this->formatEndpointReason($endpoint['reason']);
+                $className = class_basename($endpoint['class']);
+                $tableData[] = [$className, "Level {$endpoint['depth']}", $reason];
+            }
+            $this->table(['Class', 'Depth', 'Reason'], $tableData);
+        }
+
+        // Display cycles if found
+        if (!empty($deepTrace['cycles_detected'])) {
+            $this->warn("\n🔄 Circular Dependencies Detected:");
+            foreach ($deepTrace['cycles_detected'] as $i => $cycle) {
+                $cyclePath = array_map('class_basename', $cycle['cycle_path']);
+                $this->warn("  Cycle " . ($i + 1) . " (Depth {$cycle['depth']}): " . implode(' → ', $cyclePath));
+            }
+        }
+    }
+
+    private function formatConnectionType(string $type): string
+    {
+        return match($type) {
+            'uses_action' => 'Action',
+            'uses_service' => 'Service',
+            'uses_model' => 'Model',
+            'uses_repository' => 'Repository',
+            default => ucfirst(str_replace('_', ' ', $type))
+        };
+    }
+
+    private function formatEndpointReason(string $reason): string
+    {
+        return match($reason) {
+            'no_connections' => 'No further connections',
+            'max_depth_reached' => 'Maximum depth reached',
+            'cycle_detected' => 'Circular dependency',
+            default => $reason
         };
     }
 }
