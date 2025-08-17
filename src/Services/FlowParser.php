@@ -145,20 +145,38 @@ class FlowParser
         } else {
             $controller = $controllerAction;
             $method = '__invoke'; // Default method for single action controllers
+        }
+        
+        // Resolve short class name to full qualified name
+        $fullControllerClass = $this->resolveFullClassName($controller);
+        if (!$fullControllerClass) {
+            throw new \Exception("Controller/Action '{$controller}' not found in project");
+        }
+        
+        $controller = $fullControllerClass;
+        
+        // For single action controllers/actions, try to find the actual method
+        if ($method === '__invoke' && class_exists($controller)) {
+            $reflection = new \ReflectionClass($controller);
+            $publicMethods = array_filter($reflection->getMethods(\ReflectionMethod::IS_PUBLIC), function($methodReflection) use ($reflection) {
+                return !in_array($methodReflection->getName(), ['__construct', '__destruct']) && 
+                       $methodReflection->getDeclaringClass()->getName() === $reflection->getName();
+            });
             
-            // Try to find the controller class and get a public method
-            $controllerClass = $this->findControllerClass($controller);
-            if ($controllerClass && class_exists($controllerClass)) {
-                $reflection = new \ReflectionClass($controllerClass);
-                $publicMethods = array_filter($reflection->getMethods(\ReflectionMethod::IS_PUBLIC), function($method) use ($reflection) {
-                    return !in_array($method->getName(), ['__construct', '__destruct']) && 
-                           $method->getDeclaringClass()->getName() === $reflection->getName();
-                });
+            if (!empty($publicMethods)) {
+                // Prefer common action method names
+                $preferredMethods = ['handle', 'execute', 'run', 'perform', '__invoke'];
+                foreach ($preferredMethods as $preferred) {
+                    if ($reflection->hasMethod($preferred)) {
+                        $method = $preferred;
+                        break;
+                    }
+                }
                 
-                if (!empty($publicMethods)) {
+                // If no preferred method found, use first public method
+                if ($method === '__invoke' && !$reflection->hasMethod('__invoke')) {
                     $method = $publicMethods[0]->getName();
                 }
-                $controller = $controllerClass;
             }
         }
         
@@ -678,6 +696,116 @@ class FlowParser
             }
         }
         
+        return null;
+    }
+
+    private function resolveFullClassName(string $className): ?string
+    {
+        // If already fully qualified, return as-is
+        if (str_contains($className, '\\') && class_exists($className)) {
+            return $className;
+        }
+        
+        // Use cached class discovery for better performance
+        static $classCache = [];
+        if (isset($classCache[$className])) {
+            return $classCache[$className];
+        }
+        
+        // Try with findControllerClass method (existing logic)
+        $foundClass = $this->findControllerClass($className);
+        if ($foundClass) {
+            $classCache[$className] = $foundClass;
+            return $foundClass;
+        }
+        
+        // Enhanced search: Look for the class in the entire project
+        $foundClass = $this->searchClassInProject($className);
+        if ($foundClass) {
+            $classCache[$className] = $foundClass;
+            return $foundClass;
+        }
+        
+        $classCache[$className] = null;
+        return null;
+    }
+    
+    private function searchClassInProject(string $className): ?string
+    {
+        // Build comprehensive search paths
+        $basePath = base_path();
+        $searchPaths = [];
+        
+        // Add common Laravel/PHP project directories
+        $commonDirs = ['src', 'app', 'Application', 'lib', 'packages', 'domain', 'Domain'];
+        foreach ($commonDirs as $dir) {
+            $fullPath = $basePath . DIRECTORY_SEPARATOR . $dir;
+            if (is_dir($fullPath)) {
+                $searchPaths[] = $fullPath;
+            }
+        }
+        
+        // If no common directories found, search entire project (slower but comprehensive)
+        if (empty($searchPaths)) {
+            $searchPaths[] = $basePath;
+        }
+        
+        foreach ($searchPaths as $searchPath) {
+            $result = $this->searchClassInPath($searchPath, $className);
+            if ($result) {
+                return $result;
+            }
+        }
+        
+        return null;
+    }
+    
+    private function searchClassInPath(string $path, string $className): ?string
+    {
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::LEAVES_ONLY
+            );
+
+            foreach ($iterator as $file) {
+                if ($file->isFile() && $file->getExtension() === 'php') {
+                    // Skip vendor directory for performance
+                    if (strpos($file->getPath(), 'vendor') !== false) {
+                        continue;
+                    }
+
+                    $content = file_get_contents($file->getRealPath());
+                    
+                    // More comprehensive regex to match class definitions
+                    $classPatterns = [
+                        "/(?:abstract\s+)?class\s+{$className}(?:\s+extends|\s+implements|\s*\{)/",
+                        "/(?:final\s+)?class\s+{$className}(?:\s+extends|\s+implements|\s*\{)/",
+                        "/interface\s+{$className}(?:\s+extends|\s*\{)/",
+                        "/trait\s+{$className}(?:\s*\{)/"
+                    ];
+                    
+                    foreach ($classPatterns as $pattern) {
+                        if (preg_match($pattern, $content)) {
+                            if (preg_match('/namespace\s+([^;]+);/', $content, $matches)) {
+                                $namespace = trim($matches[1]);
+                                $fullClassName = $namespace . '\\' . $className;
+                                
+                                // Verify the class actually exists and can be loaded
+                                if (class_exists($fullClassName) || interface_exists($fullClassName) || trait_exists($fullClassName)) {
+                                    return $fullClassName;
+                                }
+                            }
+                            break; // Found class definition, no need to check other patterns
+                        }
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            // Log error but continue searching
+            error_log("Error searching for class {$className} in path {$path}: " . $e->getMessage());
+        }
+
         return null;
     }
 }
