@@ -1256,11 +1256,14 @@ class FlowTraceCommand extends Command
     {
         $calls = [];
         
-        // Find method calls like $this->methodName(), $object->methodName(), Class::methodName()
+        // Enhanced patterns to catch Laravel-specific patterns
         $patterns = [
             '/\$this\s*->\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'internal_method',
             '/\$([a-zA-Z_][a-zA-Z0-9_]*)\s*->\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'instance_method',
             '/([A-Z][a-zA-Z0-9_\\\\]*)::\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'static_method',
+            // Laravel app() helper with class resolution
+            '/app\s*\(\s*([A-Z][a-zA-Z0-9_\\\\]*(?:Task|Action|Service|Repository|Query))\s*::\s*class\s*\)\s*->\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'app_helper_method',
+            '/app\s*\(\s*([\'"]?)([A-Z][a-zA-Z0-9_\\\\]*(?:Task|Action|Service|Repository|Query))\1\s*\)\s*->\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'app_helper_string',
             '/([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'function_call'
         ];
         
@@ -1292,9 +1295,25 @@ class FlowTraceCommand extends Command
                                 'call' => $match[0]
                             ];
                             break;
+                        case 'app_helper_method':
+                            $calls[] = [
+                                'type' => 'App Helper',
+                                'class' => $match[1],
+                                'method' => $match[2],
+                                'call' => $match[0]
+                            ];
+                            break;
+                        case 'app_helper_string':
+                            $calls[] = [
+                                'type' => 'App Helper',
+                                'class' => $match[2],
+                                'method' => $match[3],
+                                'call' => $match[0]
+                            ];
+                            break;
                         case 'function_call':
                             // Filter out common PHP functions and keywords
-                            if (!in_array($match[1], ['if', 'for', 'while', 'foreach', 'switch', 'return', 'echo', 'print', 'isset', 'empty', 'array', 'count'])) {
+                            if (!in_array($match[1], ['if', 'for', 'while', 'foreach', 'switch', 'return', 'echo', 'print', 'isset', 'empty', 'array', 'count', 'use', 'function', 'class', 'new'])) {
                                 $calls[] = [
                                     'type' => 'Function Call',
                                     'function' => $match[1],
@@ -1314,10 +1333,13 @@ class FlowTraceCommand extends Command
     {
         $calls = [];
         
-        // Find calls to other classes/services
+        // Enhanced patterns for Laravel applications
         $patterns = [
             '/new\s+([A-Z][a-zA-Z0-9_\\\\]+)\s*\(/' => 'instantiation',
-            '/([A-Z][a-zA-Z0-9_\\\\]+)::\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'static_call'
+            '/([A-Z][a-zA-Z0-9_\\\\]+)::\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'static_call',
+            // Laravel app() helper patterns
+            '/app\s*\(\s*([A-Z][a-zA-Z0-9_\\\\]*(?:Task|Action|Service|Repository|Query))\s*::\s*class\s*\)/' => 'app_helper_class',
+            '/app\s*\(\s*[\'"]([A-Z][a-zA-Z0-9_\\\\]*(?:Task|Action|Service|Repository|Query))[\'"]\s*\)/' => 'app_helper_string'
         ];
         
         foreach ($patterns as $pattern => $type) {
@@ -1622,10 +1644,14 @@ class FlowTraceCommand extends Command
     
     private function isActualDependency(array $call): bool
     {
-        // Only consider calls that represent real dependencies
+        // Include Laravel-specific dependency types
         $dependencyTypes = [
-            'Static Method',     // Class::method()
-            'Instance Method'    // $service->method() 
+            'Static Method',        // Class::method()
+            'Instance Method',      // $service->method() 
+            'App Helper',          // app(Service::class)->method()
+            'instantiation',       // new Service()
+            'app_helper_class',    // app(Service::class)
+            'app_helper_string'    // app('Service')
         ];
         
         // Exclude internal method calls within the same class
@@ -1640,7 +1666,7 @@ class FlowTraceCommand extends Command
                 'serialize', 'unserialize', 'md5', 'sha1', 'hash', 'time', 'date',
                 'strpos', 'substr', 'strlen', 'trim', 'explode', 'implode',
                 'response', 'redirect', 'abort', 'url', 'route', 'config',
-                'env', 'collect', 'request', 'auth', 'session'
+                'env', 'collect', 'request', 'auth', 'session', 'dispatch'
             ];
             
             $function = $call['function'] ?? $call['method'] ?? '';
