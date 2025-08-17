@@ -357,31 +357,134 @@ class CodeAnalyzer
         return 'unknown';
     }
 
-    public function findClassesInDirectory(string $directory): array
+    public function findClassesInDirectory(string $directory, int $maxFiles = 1000): array
     {
         $classes = [];
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($directory)
-        );
+        $fileCount = 0;
+        
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($directory, \RecursiveDirectoryIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::LEAVES_ONLY
+            );
 
-        foreach ($iterator as $file) {
-            if ($file->isFile() && $file->getExtension() === 'php') {
-                $content = file_get_contents($file->getRealPath());
-                if (preg_match('/namespace\s+([^;]+);.*class\s+([A-Za-z0-9_]+)/s', $content, $matches)) {
-                    $namespace = trim($matches[1]);
-                    $className = trim($matches[2]);
-                    $fullClassName = $namespace . '\\' . $className;
-                    
-                    $classes[] = [
-                        'class' => $fullClassName,
-                        'file' => $file->getRealPath(),
-                        'namespace' => $namespace,
-                        'name' => $className,
-                    ];
+            foreach ($iterator as $file) {
+                // Limit file processing for large codebases
+                if ($fileCount >= $maxFiles) {
+                    break;
                 }
+
+                if ($file->isFile() && $file->getExtension() === 'php') {
+                    // Skip vendor directory and other common non-source directories
+                    $relativePath = str_replace($directory, '', $file->getPath());
+                    if (preg_match('/\/(vendor|node_modules|storage|bootstrap\/cache)/', $relativePath)) {
+                        continue;
+                    }
+
+                    $fileCount++;
+                    $content = file_get_contents($file->getRealPath());
+                    
+                    // Enhanced regex to handle multiple classes in one file and abstract classes
+                    if (preg_match_all('/namespace\s+([^;]+);.*?(?:abstract\s+)?(?:class|interface|trait)\s+([A-Za-z0-9_]+)/s', $content, $matches, PREG_SET_ORDER)) {
+                        foreach ($matches as $match) {
+                            $namespace = trim($match[1]);
+                            $className = trim($match[2]);
+                            $fullClassName = $namespace . '\\' . $className;
+                            
+                            // Check if it's a controller, service, or action
+                            $type = 'Unknown';
+                            if (str_contains($className, 'Controller')) $type = 'Controller';
+                            elseif (str_contains($className, 'Service')) $type = 'Service';
+                            elseif (str_contains($className, 'Action')) $type = 'Action';
+                            elseif (str_contains($className, 'Repository')) $type = 'Repository';
+                            elseif (str_contains($className, 'Model')) $type = 'Model';
+                            elseif (str_contains($className, 'Middleware')) $type = 'Middleware';
+                            
+                            $classes[] = [
+                                'class' => $fullClassName,
+                                'file' => $file->getRealPath(),
+                                'namespace' => $namespace,
+                                'name' => $className,
+                                'type' => $type,
+                                'size' => $file->getSize(),
+                            ];
+                        }
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            error_log("Error scanning directory {$directory}: " . $e->getMessage());
+        }
+
+        // Sort by type and name for better organization
+        usort($classes, function($a, $b) {
+            if ($a['type'] === $b['type']) {
+                return strcmp($a['name'], $b['name']);
+            }
+            return strcmp($a['type'], $b['type']);
+        });
+
+        return $classes;
+    }
+
+    public function getProjectStatistics(string $projectPath): array
+    {
+        $stats = [
+            'total_classes' => 0,
+            'controllers' => 0,
+            'services' => 0,
+            'models' => 0,
+            'actions' => 0,
+            'largest_files' => [],
+            'deepest_namespaces' => [],
+        ];
+
+        $classes = $this->findClassesInDirectory($projectPath, 2000);
+        $stats['total_classes'] = count($classes);
+
+        foreach ($classes as $class) {
+            switch ($class['type']) {
+                case 'Controller':
+                    $stats['controllers']++;
+                    break;
+                case 'Service':
+                    $stats['services']++;
+                    break;
+                case 'Model':
+                    $stats['models']++;
+                    break;
+                case 'Action':
+                    $stats['actions']++;
+                    break;
+            }
+
+            // Track large files
+            if ($class['size'] > 10000) { // > 10KB
+                $stats['largest_files'][] = [
+                    'class' => $class['class'],
+                    'size' => $class['size'],
+                    'file' => $class['file'],
+                ];
+            }
+
+            // Track deep namespaces
+            $namespaceDepth = substr_count($class['namespace'], '\\');
+            if ($namespaceDepth > 4) {
+                $stats['deepest_namespaces'][] = [
+                    'namespace' => $class['namespace'],
+                    'depth' => $namespaceDepth,
+                    'class' => $class['name'],
+                ];
             }
         }
 
-        return $classes;
+        // Sort and limit results
+        usort($stats['largest_files'], fn($a, $b) => $b['size'] <=> $a['size']);
+        $stats['largest_files'] = array_slice($stats['largest_files'], 0, 10);
+
+        usort($stats['deepest_namespaces'], fn($a, $b) => $b['depth'] <=> $a['depth']);
+        $stats['deepest_namespaces'] = array_slice($stats['deepest_namespaces'], 0, 10);
+
+        return $stats;
     }
 }

@@ -87,15 +87,50 @@ class FlowParser
 
     private function parseFromUrl(string $url, array $flow): array
     {
-        $request = \Illuminate\Http\Request::create($url, 'GET');
+        // Try different HTTP methods for API routes
+        $methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+        $lastException = null;
         
-        try {
-            $route = Route::getRoutes()->match($request);
-            $routeName = $route->getName() ?? 'unnamed';
-            return $this->parseFromRoute($routeName, $flow);
-        } catch (\Exception $e) {
-            throw new \Exception("No matching route found for URL $url");
+        foreach ($methods as $method) {
+            try {
+                $request = \Illuminate\Http\Request::create($url, $method);
+                $route = Route::getRoutes()->match($request);
+                
+                $flow['route'] = [
+                    'name' => $route->getName() ?? 'unnamed',
+                    'uri' => $route->uri(),
+                    'methods' => $route->methods(),
+                    'parameters' => $route->parameterNames(),
+                    'matched_method' => $method,
+                ];
+
+                $flow['middleware'] = $this->extractMiddleware($route);
+
+                $action = $route->getAction();
+                if (isset($action['controller'])) {
+                    $controllerAction = $action['controller'];
+                    if (str_contains($controllerAction, '@')) {
+                        [$controller, $methodName] = explode('@', $controllerAction);
+                    } else {
+                        $controller = $controllerAction;
+                        $methodName = '__invoke';
+                    }
+                    
+                    $flow['controller'] = $controller;
+                    $flow['action'] = $methodName;
+                    
+                    $flow = $this->analyzeControllerFlow($controller, $methodName, $flow);
+                }
+
+                return $flow;
+                
+            } catch (\Exception $e) {
+                $lastException = $e;
+                continue;
+            }
         }
+        
+        throw new \Exception("No matching route found for URL $url with any HTTP method. Last error: " . $lastException->getMessage());
     }
 
     private function parseFromController(string $controllerAction, array $flow): array
@@ -376,31 +411,86 @@ class FlowParser
             "App\\Http\\Controllers\\{$controllerName}",
         ];
 
-        // Then search in src directory structure
-        $srcPath = base_path('src');
-        if (is_dir($srcPath)) {
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($srcPath)
-            );
-
-            foreach ($iterator as $file) {
-                if ($file->isFile() && $file->getExtension() === 'php') {
-                    $content = file_get_contents($file->getRealPath());
-                    if (preg_match("/class\s+{$controllerName}\s+/", $content)) {
-                        if (preg_match('/namespace\s+([^;]+);/', $content, $matches)) {
-                            $namespace = trim($matches[1]);
-                            return $namespace . '\\' . $controllerName;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check if any of the possible paths exist
+        // Check if any of the possible paths exist first (fastest)
         foreach ($possiblePaths as $path) {
             if (class_exists($path)) {
                 return $path;
             }
+        }
+
+        // Build comprehensive search paths for complex projects
+        $searchPaths = [];
+        $basePath = base_path();
+        
+        // Add common Laravel/PHP project directories
+        $commonDirs = ['src', 'app', 'Application', 'lib', 'packages'];
+        foreach ($commonDirs as $dir) {
+            $fullPath = $basePath . DIRECTORY_SEPARATOR . $dir;
+            if (is_dir($fullPath)) {
+                $searchPaths[] = $fullPath;
+            }
+        }
+
+        // If no common directories found, search entire project (slower but comprehensive)
+        if (empty($searchPaths)) {
+            $searchPaths[] = $basePath;
+        }
+
+        // Use cached class discovery for better performance
+        static $classCache = [];
+        $cacheKey = md5(implode('|', $searchPaths) . '|' . $controllerName);
+        
+        if (isset($classCache[$cacheKey])) {
+            return $classCache[$cacheKey];
+        }
+
+        foreach ($searchPaths as $searchPath) {
+            $result = $this->searchControllerInPath($searchPath, $controllerName);
+            if ($result) {
+                $classCache[$cacheKey] = $result;
+                return $result;
+            }
+        }
+
+        $classCache[$cacheKey] = null;
+        return null;
+    }
+
+    private function searchControllerInPath(string $path, string $controllerName): ?string
+    {
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::LEAVES_ONLY
+            );
+
+            foreach ($iterator as $file) {
+                if ($file->isFile() && $file->getExtension() === 'php') {
+                    // Skip vendor directory for performance
+                    if (strpos($file->getPath(), 'vendor') !== false) {
+                        continue;
+                    }
+
+                    $content = file_get_contents($file->getRealPath());
+                    
+                    // More precise regex to match exact controller class name
+                    $classPattern = "/(?:abstract\s+)?class\s+{$controllerName}(?:\s+extends|\s+implements|\s*\{)/";
+                    if (preg_match($classPattern, $content)) {
+                        if (preg_match('/namespace\s+([^;]+);/', $content, $matches)) {
+                            $namespace = trim($matches[1]);
+                            $fullClassName = $namespace . '\\' . $controllerName;
+                            
+                            // Verify the class actually exists
+                            if (class_exists($fullClassName)) {
+                                return $fullClassName;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            // Log error but continue searching
+            error_log("Error searching in path {$path}: " . $e->getMessage());
         }
 
         return null;

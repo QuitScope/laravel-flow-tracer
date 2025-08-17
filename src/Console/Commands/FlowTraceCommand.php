@@ -25,7 +25,9 @@ class FlowTraceCommand extends Command
                             {--format=table : Output format (table, json)}
                             {--export= : Export visual diagram (svg, mermaid, dot)}
                             {--no-png : Disable automatic PNG generation}
-                            {--output= : Output file path for PNG}';
+                            {--output= : Output file path for PNG}
+                            {--stats : Show project statistics}
+                            {--scan= : Scan specific directory for classes}';
 
     protected $description = 'Trace Laravel application flow and automatically generate PNG diagrams';
 
@@ -57,9 +59,17 @@ class FlowTraceCommand extends Command
         $export = $this->option('export');
         $noPng = $this->option('no-png');
         $output = $this->option('output');
+        $stats = $this->option('stats');
+        $scan = $this->option('scan');
+
+        // Handle project statistics
+        if ($stats) {
+            $this->showProjectStatistics($scan ?: base_path());
+            return 0;
+        }
 
         if (!$action && !$route && !$url) {
-            $this->error('Please specify one of: --action, --route, or --url');
+            $this->error('Please specify one of: --action, --route, --url, or --stats');
             return 1;
         }
 
@@ -603,5 +613,65 @@ class FlowTraceCommand extends Command
         }
         
         return 'unknown';
+    }
+
+    private function showProjectStatistics(string $projectPath): void
+    {
+        $this->info("📊 Project Statistics for: {$projectPath}");
+        $this->line("═══════════════════════════════════════════════════");
+
+        try {
+            $stats = $this->codeAnalyzer->getProjectStatistics($projectPath);
+            
+            $this->info("\n📈 Class Distribution:");
+            $this->table(['Type', 'Count'], [
+                ['Total Classes', $stats['total_classes']],
+                ['Controllers', $stats['controllers']],
+                ['Services', $stats['services']],
+                ['Models', $stats['models']],
+                ['Actions', $stats['actions']],
+            ]);
+
+            if (!empty($stats['largest_files'])) {
+                $this->info("\n📏 Largest Files (>10KB):");
+                $tableData = [];
+                foreach (array_slice($stats['largest_files'], 0, 5) as $file) {
+                    $sizeKB = round($file['size'] / 1024, 1);
+                    $tableData[] = [
+                        class_basename($file['class']),
+                        "{$sizeKB}KB",
+                        str_replace(base_path(), '', $file['file'])
+                    ];
+                }
+                $this->table(['Class', 'Size', 'File'], $tableData);
+            }
+
+            if (!empty($stats['deepest_namespaces'])) {
+                $this->info("\n🏗️ Deepest Namespaces:");
+                $tableData = [];
+                foreach (array_slice($stats['deepest_namespaces'], 0, 5) as $ns) {
+                    $tableData[] = [
+                        $ns['class'],
+                        $ns['depth'],
+                        $ns['namespace']
+                    ];
+                }
+                $this->table(['Class', 'Depth', 'Namespace'], $tableData);
+            }
+
+            $this->info("\n💡 Tips for better tracing:");
+            if ($stats['controllers'] > 50) {
+                $this->warn("  • Large number of controllers detected - consider using --scan for specific directories");
+            }
+            if (!empty($stats['deepest_namespaces'])) {
+                $this->warn("  • Deep namespaces detected - the tracer has been optimized for complex structures");
+            }
+            if (!empty($stats['largest_files'])) {
+                $this->warn("  • Large files detected - these may take longer to analyze");
+            }
+
+        } catch (\Exception $e) {
+            $this->error("Failed to analyze project: " . $e->getMessage());
+        }
     }
 }
