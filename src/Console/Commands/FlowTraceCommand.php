@@ -31,7 +31,8 @@ class FlowTraceCommand extends Command
                             {--deep : Trace complete flow until no more connections found}
                             {--max-deep=10 : Maximum depth for deep tracing (prevents infinite loops)}
                             {--internal : Show internal method calls and detailed operations}
-                            {--show-params : Show method parameters (requires --internal)}';
+                            {--show-params : Show method parameters (requires --internal)}
+                            {--debug-connections : Show why connections are detected (for debugging)}';
 
     protected $description = 'Trace Laravel application flow and automatically generate PNG diagrams';
 
@@ -69,6 +70,7 @@ class FlowTraceCommand extends Command
         $maxDeep = (int) $this->option('max-deep');
         $internal = $this->option('internal');
         $showParams = $this->option('show-params');
+        $debugConnections = $this->option('debug-connections');
 
         // Handle project statistics
         if ($stats) {
@@ -824,7 +826,11 @@ class FlowTraceCommand extends Command
         }
 
         $visited[] = $currentClass;
-        $deepTrace['visited_classes'][] = $currentClass;
+        
+        // Prevent duplicate entries in visited_classes
+        if (!in_array($currentClass, $deepTrace['visited_classes'])) {
+            $deepTrace['visited_classes'][] = $currentClass;
+        }
 
         // Initialize level if not exists
         if (!isset($deepTrace['levels'][$currentDepth])) {
@@ -892,15 +898,27 @@ class FlowTraceCommand extends Command
         }
 
         $levelData['connections'] = $connections;
-        $deepTrace['levels'][$currentDepth][] = $levelData;
+        
+        // Check if this exact class+depth combination already exists
+        $isDuplicate = false;
+        foreach ($deepTrace['levels'][$currentDepth] as $existingLevel) {
+            if ($existingLevel['class'] === $currentClass) {
+                $isDuplicate = true;
+                break;
+            }
+        }
+        
+        if (!$isDuplicate) {
+            $deepTrace['levels'][$currentDepth][] = $levelData;
+        }
 
         // Recursively trace each connection
         foreach ($connections as $connection) {
             $targetClass = $connection['target'];
             
             try {
-                // Only trace if it's a traceable class (not built-in Laravel classes)
-                if ($this->isTraceableClass($targetClass)) {
+                // Only trace if it's a traceable class and not already visited at this depth
+                if ($this->isTraceableClass($targetClass) && !in_array($targetClass, $visited)) {
                     $subFlow = $this->flowParser->parseFullFlow($targetClass, 'controller');
                     $this->buildDeepTrace($subFlow, $deepTrace, $currentDepth + 1, $maxDepth, $visited);
                 }
@@ -912,11 +930,22 @@ class FlowTraceCommand extends Command
 
         // If no connections found, this is an endpoint
         if (empty($connections)) {
-            $deepTrace['endpoints'][] = [
-                'reason' => 'no_connections',
-                'depth' => $currentDepth,
-                'class' => $currentClass
-            ];
+            // Check if this endpoint already exists
+            $endpointExists = false;
+            foreach ($deepTrace['endpoints'] as $endpoint) {
+                if ($endpoint['class'] === $currentClass && $endpoint['reason'] === 'no_connections') {
+                    $endpointExists = true;
+                    break;
+                }
+            }
+            
+            if (!$endpointExists) {
+                $deepTrace['endpoints'][] = [
+                    'reason' => 'no_connections',
+                    'depth' => $currentDepth,
+                    'class' => $currentClass
+                ];
+            }
         }
 
         // Update total depth reached
@@ -994,6 +1023,11 @@ class FlowTraceCommand extends Command
                         $targetName = class_basename($connection['target']);
                         $connectionType = $this->formatConnectionType($connection['type']);
                         $this->line("       ├─ {$targetName} ({$connectionType})");
+                        
+                        // Show debug info if enabled
+                        if ($this->option('debug-connections') && isset($connection['evidence'])) {
+                            $this->line("          Debug: {$connection['evidence']}");
+                        }
                     }
                 }
             }
@@ -1561,7 +1595,8 @@ class FlowTraceCommand extends Command
                             'target' => $target,
                             'type' => 'method_call',
                             'call_type' => $call['type'],
-                            'method' => $call['method'] ?? $call['function'] ?? 'unknown'
+                            'method' => $call['method'] ?? $call['function'] ?? 'unknown',
+                            'evidence' => $call['call'] ?? 'unknown'  // Add evidence for debugging
                         ];
                     }
                 }
