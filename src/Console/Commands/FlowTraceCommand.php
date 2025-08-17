@@ -857,6 +857,23 @@ class FlowTraceCommand extends Command
             $this->line("   Found " . count($connections) . " connections via internal analysis");
             if (isset($flow['services'])) {
                 $this->line("   Legacy services available: " . count($flow['services']));
+                foreach ($flow['services'] as $service) {
+                    $serviceName = class_basename($service['class'] ?? $service['name'] ?? 'unknown');
+                    $this->line("     - {$serviceName} ({$service['type']})");
+                }
+            }
+            if (isset($flow['uses_actions'])) {
+                $this->line("   Legacy actions available: " . count($flow['uses_actions']));
+                foreach ($flow['uses_actions'] as $action) {
+                    $actionName = class_basename($action['action']);
+                    $this->line("     - {$actionName} ({$action['usage_type']})");
+                }
+            }
+            if (isset($flow['internal_analysis']['method_calls'])) {
+                $this->line("   Internal method calls: " . count($flow['internal_analysis']['method_calls']));
+                foreach (array_slice($flow['internal_analysis']['method_calls'], 0, 3) as $call) {
+                    $this->line("     - {$call['type']}: " . ($call['call'] ?? 'unknown'));
+                }
             }
         }
         
@@ -866,8 +883,8 @@ class FlowTraceCommand extends Command
             if (isset($flow['uses_actions']) && !empty($flow['uses_actions'])) {
                 foreach ($flow['uses_actions'] as $actionData) {
                     if ($this->isValidDependency($actionData['action'])) {
-                        // Only include if usage_type shows actual instantiation
-                        if (in_array($actionData['usage_type'], ['instantiation', 'dependency_injection'])) {
+                        // Include use statements but with lower priority
+                        if (in_array($actionData['usage_type'], ['instantiation', 'dependency_injection', 'use statement'])) {
                             $connections[] = [
                                 'target' => $actionData['action'],
                                 'type' => 'uses_action',
