@@ -105,10 +105,28 @@ class FlowVisualizer
             $action = $flow['action'] ?? '__invoke';
             
             $nodeKey = "node{$nodeId}";
-            if (str_contains($flow['controller'], 'Actions\\')) {
-                $dot .= "    {$nodeKey} [label=\"⚡ Action\\n{$controllerName}\\nMethod: {$action}\", fillcolor=\"#8e44ad\", fontcolor=\"white\"];\n";
+            $label = "";
+            
+            // Add internal analysis to label if available
+            if (isset($flow['internal_analysis']) && !empty($flow['internal_analysis']['methods'])) {
+                $internalInfo = $this->generateInternalInfo($flow['internal_analysis']);
+                if (str_contains($flow['controller'], 'Actions\\') || str_contains($flow['controller'], 'Action')) {
+                    $label = "⚡ Action\\n{$controllerName}\\nMethod: {$action}\\n{$internalInfo}";
+                } else {
+                    $label = "🎯 Controller\\n{$controllerName}\\nAction: {$action}\\n{$internalInfo}";
+                }
             } else {
-                $dot .= "    {$nodeKey} [label=\"🎯 Controller\\n{$controllerName}\\nAction: {$action}\", fillcolor=\"#27ae60\", fontcolor=\"white\"];\n";
+                if (str_contains($flow['controller'], 'Actions\\') || str_contains($flow['controller'], 'Action')) {
+                    $label = "⚡ Action\\n{$controllerName}\\nMethod: {$action}";
+                } else {
+                    $label = "🎯 Controller\\n{$controllerName}\\nAction: {$action}";
+                }
+            }
+            
+            if (str_contains($flow['controller'], 'Actions\\') || str_contains($flow['controller'], 'Action')) {
+                $dot .= "    {$nodeKey} [label=\"{$label}\", fillcolor=\"#8e44ad\", fontcolor=\"white\", height=2.5];\n";
+            } else {
+                $dot .= "    {$nodeKey} [label=\"{$label}\", fillcolor=\"#27ae60\", fontcolor=\"white\", height=2.5];\n";
             }
             
             // Connect from previous level
@@ -165,6 +183,16 @@ class FlowVisualizer
                 }
             }
             $lastLevelNodes = $currentLevelNodes;
+        }
+
+        // Add internal method calls if available
+        if (isset($flow['internal_analysis']) && !empty($flow['internal_analysis']['method_calls'])) {
+            $dot .= $this->addInternalMethodNodes($flow['internal_analysis'], $lastLevelNodes, $nodeId);
+        }
+
+        // Add deep trace levels if available
+        if (isset($flow['deep_trace']) && !empty($flow['deep_trace']['levels'])) {
+            $dot .= $this->addDeepTraceNodes($flow['deep_trace'], $lastLevelNodes, $nodeId);
         }
 
         $dot .= "}\n";
@@ -368,6 +396,315 @@ class FlowVisualizer
             foreach ($nodes['models'] as $modelId) {
                 $mermaid .= "    {$nodes['controller']} --> {$modelId}\n";
             }
+        }
+
+        return $mermaid;
+    }
+
+    private function generateInternalInfo(array $internalAnalysis): string
+    {
+        $info = [];
+        $targetMethod = $internalAnalysis['target_method'] ?? 'main';
+        
+        if (isset($internalAnalysis['methods'][$targetMethod])) {
+            $method = $internalAnalysis['methods'][$targetMethod];
+            
+            // Complexity info
+            if (isset($method['complexity_indicators'])) {
+                $complexity = $method['complexity_indicators'];
+                if (isset($complexity['cyclomatic_complexity'])) {
+                    $info[] = "Complexity: {$complexity['cyclomatic_complexity']}";
+                }
+                if (isset($complexity['method_calls_count'])) {
+                    $info[] = "Calls: {$complexity['method_calls_count']}";
+                }
+            }
+            
+            // Method calls summary
+            if (!empty($method['method_calls'])) {
+                $callTypes = [];
+                foreach ($method['method_calls'] as $call) {
+                    $callTypes[$call['type']] = ($callTypes[$call['type']] ?? 0) + 1;
+                }
+                
+                $callSummary = [];
+                foreach ($callTypes as $type => $count) {
+                    $shortType = $this->shortenCallType($type);
+                    $callSummary[] = "{$shortType}: {$count}";
+                }
+                
+                if (!empty($callSummary)) {
+                    $info[] = implode(', ', array_slice($callSummary, 0, 2));
+                }
+            }
+        }
+        
+        return implode('\\n', array_slice($info, 0, 3));
+    }
+
+    private function shortenCallType(string $type): string
+    {
+        return match($type) {
+            'Internal Method' => 'Internal',
+            'Instance Method' => 'Instance',
+            'Static Method' => 'Static',
+            'Function Call' => 'Function',
+            default => $type
+        };
+    }
+
+    private function addInternalMethodNodes(array $internalAnalysis, array $lastLevelNodes, int &$nodeId): string
+    {
+        $dot = "\n    // Internal Method Calls\n";
+        
+        if (empty($internalAnalysis['method_calls'])) {
+            return '';
+        }
+        
+        // Group method calls by type
+        $groupedCalls = [];
+        foreach ($internalAnalysis['method_calls'] as $call) {
+            $groupedCalls[$call['type']][] = $call;
+        }
+        
+        $currentLevelNodes = [];
+        
+        foreach ($groupedCalls as $type => $calls) {
+            // Limit to most important calls
+            $limitedCalls = array_slice($calls, 0, 3);
+            
+            foreach ($limitedCalls as $call) {
+                $nodeKey = "node{$nodeId}";
+                
+                $target = $call['target'] ?? $call['class'] ?? $call['variable'] ?? $call['function'] ?? 'N/A';
+                $method = $call['method'] ?? $call['function'] ?? 'N/A';
+                
+                $label = "🔧 {$type}\\n{$target}\\n{$method}";
+                $color = $this->getCallTypeColor($type);
+                
+                $dot .= "    {$nodeKey} [label=\"{$label}\", fillcolor=\"{$color}\", fontcolor=\"white\", shape=\"ellipse\", height=1.2];\n";
+                $currentLevelNodes[] = $nodeKey;
+                $nodeId++;
+            }
+        }
+        
+        // Connect from controller/action to internal calls
+        foreach ($lastLevelNodes as $prevNode) {
+            foreach ($currentLevelNodes as $currNode) {
+                $dot .= "    {$prevNode} -> {$currNode} [style=\"dashed\", color=\"#95a5a6\"];\n";
+            }
+        }
+        
+        return $dot;
+    }
+
+    private function getCallTypeColor(string $type): string
+    {
+        return match($type) {
+            'Internal Method' => '#9b59b6',
+            'Instance Method' => '#3498db',
+            'Static Method' => '#e74c3c',
+            'Function Call' => '#f39c12',
+            default => '#95a5a6'
+        };
+    }
+
+    private function addDeepTraceNodes(array $deepTrace, array $lastLevelNodes, int &$nodeId): string
+    {
+        if (empty($deepTrace['levels']) || count($deepTrace['levels']) <= 1) {
+            return '';
+        }
+        
+        $dot = "\n    // Deep Trace Levels\n";
+        $currentLevelNodes = $lastLevelNodes;
+        
+        // Skip level 0 (already shown in main flow)
+        for ($level = 1; $level < count($deepTrace['levels']) && $level <= 3; $level++) {
+            $levelClasses = $deepTrace['levels'][$level];
+            $nextLevelNodes = [];
+            
+            foreach ($levelClasses as $classData) {
+                $nodeKey = "node{$nodeId}";
+                $className = class_basename($classData['class']);
+                $action = $classData['action'] ? "::{$classData['action']}" : '';
+                $type = $classData['type'];
+                
+                $label = "🌊 Level {$level}\\n{$type}\\n{$className}{$action}";
+                $color = $this->getDeepTraceColor($type);
+                
+                $dot .= "    {$nodeKey} [label=\"{$label}\", fillcolor=\"{$color}\", fontcolor=\"white\", shape=\"box\", style=\"filled,rounded,dashed\"];\n";
+                $nextLevelNodes[] = $nodeKey;
+                $nodeId++;
+                
+                // Show connections count
+                if (!empty($classData['connections'])) {
+                    $connectionCount = count($classData['connections']);
+                    if ($connectionCount > 0) {
+                        $label .= "\\n({$connectionCount} connections)";
+                    }
+                }
+            }
+            
+            // Connect previous level to current level
+            foreach ($currentLevelNodes as $prevNode) {
+                foreach ($nextLevelNodes as $currNode) {
+                    $dot .= "    {$prevNode} -> {$currNode} [style=\"dotted\", color=\"#34495e\"];\n";
+                }
+            }
+            
+            $currentLevelNodes = $nextLevelNodes;
+        }
+        
+        return $dot;
+    }
+
+    private function getDeepTraceColor(string $type): string
+    {
+        return match($type) {
+            'Controller' => '#27ae60',
+            'Action' => '#8e44ad',
+            'Service' => '#f39c12',
+            'Repository' => '#e67e22',
+            'Model' => '#e91e63',
+            'Query' => '#16a085',
+            default => '#7f8c8d'
+        };
+    }
+
+    public function generateMermaidDiagramWithInternal(array $flow): string
+    {
+        $mermaid = "graph TD\n";
+        
+        $nodeCounter = 0;
+        $nodes = [];
+
+        // Add title
+        $title = $this->getFlowTitle($flow);
+        $mermaid .= "    %% {$title}\n\n";
+
+        // Route node
+        if (isset($flow['route'])) {
+            $routeId = 'R' . $nodeCounter++;
+            $routeName = $flow['route']['name'] ?? 'unnamed';
+            $mermaid .= "    {$routeId}[\"🔗 Route: {$routeName}\"]\n";
+            $nodes['route'] = $routeId;
+        }
+
+        // Middleware nodes
+        if (!empty($flow['middleware'])) {
+            foreach ($flow['middleware'] as $i => $middleware) {
+                $middlewareId = 'M' . $nodeCounter++;
+                $mermaid .= "    {$middlewareId}[\"🛡️ {$middleware['name']}\"]\n";
+                $nodes['middleware'][] = $middlewareId;
+            }
+        }
+
+        // Controller node with internal info
+        if (isset($flow['controller'])) {
+            $controllerId = 'C' . $nodeCounter++;
+            $controllerName = class_basename($flow['controller']);
+            $action = $flow['action'] ?? '__invoke';
+            
+            $label = "";
+            if (str_contains($flow['controller'], 'Action')) {
+                $label = "⚡ {$controllerName}::{$action}";
+            } else {
+                $label = "🎯 {$controllerName}::{$action}";
+            }
+            
+            // Add internal analysis to label
+            if (isset($flow['internal_analysis']) && !empty($flow['internal_analysis']['methods'])) {
+                $internalInfo = $this->generateInternalInfo($flow['internal_analysis']);
+                if ($internalInfo) {
+                    $label .= "<br/>{$internalInfo}";
+                }
+            }
+            
+            $mermaid .= "    {$controllerId}[\"{$label}\"]\n";
+            $nodes['controller'] = $controllerId;
+        }
+
+        // Internal method calls
+        if (isset($flow['internal_analysis']) && !empty($flow['internal_analysis']['method_calls'])) {
+            $methodCallGroups = [];
+            foreach ($flow['internal_analysis']['method_calls'] as $call) {
+                $methodCallGroups[$call['type']][] = $call;
+            }
+            
+            foreach ($methodCallGroups as $type => $calls) {
+                // Limit to 2 most important calls per type
+                foreach (array_slice($calls, 0, 2) as $call) {
+                    $callId = 'MC' . $nodeCounter++;
+                    $target = $call['target'] ?? $call['class'] ?? $call['variable'] ?? $call['function'] ?? 'N/A';
+                    $method = $call['method'] ?? $call['function'] ?? 'N/A';
+                    
+                    $mermaid .= "    {$callId}[\"🔧 {$type}<br/>{$target}<br/>{$method}\"]\n";
+                    $nodes['method_calls'][] = $callId;
+                }
+            }
+        }
+
+        // Service nodes
+        if (!empty($flow['services'])) {
+            foreach ($flow['services'] as $service) {
+                $serviceId = 'S' . $nodeCounter++;
+                $serviceName = class_basename($service['class']);
+                $serviceType = $service['type'] ?? 'Service';
+                $mermaid .= "    {$serviceId}[\"⚙️ {$serviceType}: {$serviceName}\"]\n";
+                $nodes['services'][] = $serviceId;
+            }
+        }
+
+        // Model nodes
+        if (!empty($flow['models'])) {
+            foreach ($flow['models'] as $model) {
+                $modelId = 'D' . $nodeCounter++;
+                $modelName = class_basename($model['class']);
+                $mermaid .= "    {$modelId}[\"📊 {$modelName}\"]\n";
+                $nodes['models'][] = $modelId;
+            }
+        }
+
+        // Add connections
+        $mermaid .= "\n    %% Connections\n";
+        
+        $lastNode = $nodes['route'] ?? null;
+        
+        if (!empty($nodes['middleware']) && $lastNode) {
+            foreach ($nodes['middleware'] as $middlewareId) {
+                $mermaid .= "    {$lastNode} --> {$middlewareId}\n";
+                $lastNode = $middlewareId;
+            }
+        }
+
+        if (isset($nodes['controller']) && $lastNode) {
+            $mermaid .= "    {$lastNode} --> {$nodes['controller']}\n";
+        }
+
+        // Connect to internal method calls
+        if (!empty($nodes['method_calls']) && isset($nodes['controller'])) {
+            foreach ($nodes['method_calls'] as $callId) {
+                $mermaid .= "    {$nodes['controller']} -.-> {$callId}\n";
+            }
+        }
+
+        if (!empty($nodes['services']) && isset($nodes['controller'])) {
+            foreach ($nodes['services'] as $serviceId) {
+                $mermaid .= "    {$nodes['controller']} --> {$serviceId}\n";
+            }
+        }
+
+        if (!empty($nodes['models']) && isset($nodes['controller'])) {
+            foreach ($nodes['models'] as $modelId) {
+                $mermaid .= "    {$nodes['controller']} --> {$modelId}\n";
+            }
+        }
+
+        // Add styling
+        $mermaid .= "\n    %% Styling\n";
+        if (isset($nodes['controller'])) {
+            $mermaid .= "    classDef controller fill:#27ae60,stroke:#27ae60,stroke-width:2px,color:#fff\n";
+            $mermaid .= "    class {$nodes['controller']} controller\n";
         }
 
         return $mermaid;
