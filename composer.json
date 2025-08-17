@@ -1,5 +1,5 @@
 {
-    "name": "yourname/laravel-flow-tracer",
+    "name": "quitscope/laravel-flow-tracer",
     "description": "A powerful Laravel package to trace and visualize application flows with automatic high-quality PNG diagrams using Graphviz",
     "keywords": ["laravel", "flow", "tracer", "visualization", "diagram", "graphviz", "ddd", "architecture"],
     "homepage": "https://github.com/quitscope/laravel-flow-tracer",
@@ -41,5 +41,12 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "repositories": {
+        "packagist.org": false,
+        "private-packagist": {
+            "type": "composer",
+            "url": "https://repo.packagist.com/paradise/"
+        }
+    }
 }
