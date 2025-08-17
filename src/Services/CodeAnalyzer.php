@@ -212,19 +212,35 @@ class CodeAnalyzer
     private function findServiceCalls(string $source): array
     {
         $calls = [];
-        if (preg_match_all('/new\s+([A-Z][a-zA-Z0-9_\\\\]*Service)/', $source, $matches)) {
-            foreach ($matches[1] as $service) {
-                $calls[] = ['type' => 'Service Instantiation', 'class' => $service];
+        
+        // More precise patterns that require proper PHP context
+        $patterns = [
+            // new ServiceClass() or new Namespace\ServiceClass()
+            '/new\s+([A-Z][a-zA-Z0-9_\\\\]*(?:Service|Action|Task|Handler|Repository|Query))\s*\(/' => 'Service Instantiation',
+            // ServiceClass::method() or Namespace\ServiceClass::method()
+            '/([A-Z][a-zA-Z0-9_\\\\]*(?:Service|Action|Task|Handler|Repository|Query))::\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\(/' => 'Static Service Call',
+            // $this->serviceProperty or $this->serviceMethod()
+            '/\$this\s*->\s*([a-zA-Z_][a-zA-Z0-9_]*(?:Service|Action|Task|Handler|Repository|Query))\s*[\(\-]/' => 'Property/Method Access',
+            // $variable->method() where $variable could be a service
+            '/\$([a-zA-Z_][a-zA-Z0-9_]*)\s*->\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\(/' => 'Instance Method Call'
+        ];
+
+        foreach ($patterns as $pattern => $type) {
+            if (preg_match_all($pattern, $source, $matches, PREG_SET_ORDER)) {
+                foreach ($matches as $match) {
+                    // Verify this is not in a comment or string
+                    if (!$this->isInCommentOrString($source, $match[0])) {
+                        $calls[] = [
+                            'type' => $type, 
+                            'class' => $match[1],
+                            'context' => trim(substr($match[0], 0, 50))
+                        ];
+                    }
+                }
             }
         }
 
-        if (preg_match_all('/([A-Z][a-zA-Z0-9_\\\\]*Service)::/', $source, $matches)) {
-            foreach ($matches[1] as $service) {
-                $calls[] = ['type' => 'Static Service Call', 'class' => $service];
-            }
-        }
-
-        return $calls;
+        return array_unique($calls, SORT_REGULAR);
     }
 
     private function findModelOperations(string $source): array
@@ -486,5 +502,48 @@ class CodeAnalyzer
         $stats['deepest_namespaces'] = array_slice($stats['deepest_namespaces'], 0, 10);
 
         return $stats;
+    }
+
+    private function isInCommentOrString(string $source, string $needle): bool
+    {
+        $position = strpos($source, $needle);
+        if ($position === false) {
+            return false;
+        }
+
+        // Check if we're inside a string literal
+        $beforeText = substr($source, 0, $position);
+        
+        // Count unescaped quotes before this position
+        $singleQuotes = substr_count($beforeText, "'") - substr_count($beforeText, "\\'");
+        $doubleQuotes = substr_count($beforeText, '"') - substr_count($beforeText, '\\"');
+        
+        // If odd number of quotes, we're inside a string
+        if (($singleQuotes % 2) === 1 || ($doubleQuotes % 2) === 1) {
+            return true;
+        }
+
+        // Check if we're inside a comment
+        $lines = explode("\n", $beforeText);
+        $currentLine = end($lines);
+        
+        // Single line comment
+        if (strpos($currentLine, '//') !== false) {
+            $commentPos = strpos($currentLine, '//');
+            $needlePos = strlen($beforeText) - strlen($currentLine) + strpos($source . "\n", $needle) - strlen($beforeText);
+            if ($needlePos > $commentPos) {
+                return true;
+            }
+        }
+        
+        // Multi-line comment (basic check)
+        $openComment = strrpos($beforeText, '/*');
+        $closeComment = strrpos($beforeText, '*/');
+        
+        if ($openComment !== false && ($closeComment === false || $openComment > $closeComment)) {
+            return true;
+        }
+
+        return false;
     }
 }

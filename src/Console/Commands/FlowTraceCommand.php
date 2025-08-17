@@ -841,39 +841,52 @@ class FlowTraceCommand extends Command
         // Find all connections from this class
         $connections = [];
 
-        // 1. Actions used by this controller
-        if (isset($flow['uses_actions']) && !empty($flow['uses_actions'])) {
-            foreach ($flow['uses_actions'] as $actionData) {
-                $connections[] = [
-                    'target' => $actionData['action'],
-                    'type' => 'uses_action',
-                    'usage_type' => $actionData['usage_type']
-                ];
-            }
-        }
-
-        // 2. Services used
-        if (isset($flow['services']) && !empty($flow['services'])) {
-            foreach ($flow['services'] as $service) {
-                if (isset($service['class'])) {
-                    $connections[] = [
-                        'target' => $service['class'],
-                        'type' => 'uses_service',
-                        'service_type' => $service['type'] ?? 'unknown'
-                    ];
+        // Only include actual code dependencies, not false positives
+        $connections = $this->findRealDependencies($flow);
+        
+        // Legacy fallback for older analysis format
+        if (empty($connections)) {
+            // 1. Actions used by this controller
+            if (isset($flow['uses_actions']) && !empty($flow['uses_actions'])) {
+                foreach ($flow['uses_actions'] as $actionData) {
+                    if ($this->isValidDependency($actionData['action'])) {
+                        $connections[] = [
+                            'target' => $actionData['action'],
+                            'type' => 'uses_action',
+                            'usage_type' => $actionData['usage_type']
+                        ];
+                    }
                 }
             }
-        }
 
-        // 3. Models used
-        if (isset($flow['models']) && !empty($flow['models'])) {
-            foreach ($flow['models'] as $model) {
-                if (isset($model['class'])) {
-                    $connections[] = [
-                        'target' => $model['class'],
-                        'type' => 'uses_model',
-                        'operations' => $model['operations'] ?? []
-                    ];
+            // 2. Services used - only if they have actual instantiation/calls
+            if (isset($flow['services']) && !empty($flow['services'])) {
+                foreach ($flow['services'] as $service) {
+                    if (isset($service['class']) && $this->isValidDependency($service['class'])) {
+                        // Only include if there's evidence of actual usage
+                        if (isset($service['methods']) && !empty($service['methods'])) {
+                            $connections[] = [
+                                'target' => $service['class'],
+                                'type' => 'uses_service',
+                                'service_type' => $service['type'] ?? 'unknown'
+                            ];
+                        }
+                    }
+                }
+            }
+
+            // 3. Models used - only with actual operations
+            if (isset($flow['models']) && !empty($flow['models'])) {
+                foreach ($flow['models'] as $model) {
+                    if (isset($model['class']) && $this->isValidDependency($model['class'])) {
+                        if (isset($model['operations']) && !empty($model['operations'])) {
+                            $connections[] = [
+                                'target' => $model['class'],
+                                'type' => 'uses_model',
+                                'operations' => $model['operations']
+                            ];
+                        }
+                    }
                 }
             }
         }
@@ -1531,5 +1544,124 @@ class FlowTraceCommand extends Command
         }
 
         $this->newLine();
+    }
+
+    private function findRealDependencies(array $flow): array
+    {
+        $connections = [];
+        
+        // Use internal analysis if available for more accurate dependency detection
+        if (isset($flow['internal_analysis']) && !empty($flow['internal_analysis']['method_calls'])) {
+            foreach ($flow['internal_analysis']['method_calls'] as $call) {
+                // Only include calls that represent actual dependencies
+                if ($this->isActualDependency($call)) {
+                    $target = $call['class'] ?? $call['target'] ?? null;
+                    if ($target && $this->isValidDependency($target)) {
+                        $connections[] = [
+                            'target' => $target,
+                            'type' => 'method_call',
+                            'call_type' => $call['type'],
+                            'method' => $call['method'] ?? $call['function'] ?? 'unknown'
+                        ];
+                    }
+                }
+            }
+        }
+        
+        return array_unique($connections, SORT_REGULAR);
+    }
+    
+    private function isActualDependency(array $call): bool
+    {
+        // Only consider calls that represent real dependencies
+        $dependencyTypes = [
+            'Static Method',     // Class::method()
+            'Instance Method'    // $service->method() 
+        ];
+        
+        // Exclude internal method calls within the same class
+        if ($call['type'] === 'Internal Method') {
+            return false;
+        }
+        
+        // Exclude common PHP functions
+        if ($call['type'] === 'Function Call') {
+            $commonFunctions = [
+                'array', 'count', 'isset', 'empty', 'json_encode', 'json_decode',
+                'serialize', 'unserialize', 'md5', 'sha1', 'hash', 'time', 'date',
+                'strpos', 'substr', 'strlen', 'trim', 'explode', 'implode',
+                'response', 'redirect', 'abort', 'url', 'route', 'config',
+                'env', 'collect', 'request', 'auth', 'session'
+            ];
+            
+            $function = $call['function'] ?? $call['method'] ?? '';
+            if (in_array(strtolower($function), $commonFunctions)) {
+                return false;
+            }
+        }
+        
+        return in_array($call['type'], $dependencyTypes);
+    }
+    
+    private function isValidDependency(string $className): bool
+    {
+        // Skip built-in PHP and Laravel classes
+        $skipPrefixes = [
+            'Illuminate\\',
+            'Symfony\\',
+            'Carbon\\',
+            'Monolog\\',
+            'Psr\\',
+            'Laravel\\',
+            'Facade\\',
+            'Exception',
+            'DateTime',
+            'stdClass',
+            'ArrayAccess',
+            'Iterator',
+            'Countable'
+        ];
+        
+        foreach ($skipPrefixes as $prefix) {
+            if (str_starts_with($className, $prefix)) {
+                return false;
+            }
+        }
+        
+        // Must contain typical patterns for custom classes
+        $validPatterns = [
+            'Service', 'Action', 'Task', 'Handler', 'Repository', 
+            'Query', 'Controller', 'Model', 'Job', 'Event'
+        ];
+        
+        foreach ($validPatterns as $pattern) {
+            if (str_contains($className, $pattern)) {
+                // Additional validation: class should exist or be in our project
+                if (class_exists($className) || $this->isProjectClass($className)) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    private function isProjectClass(string $className): bool
+    {
+        // Check if this looks like a class from our project
+        $projectNamespaces = [
+            'App\\',
+            'Domain\\', 
+            'Application\\',
+            'Smake\\',  // For your specific project
+        ];
+        
+        foreach ($projectNamespaces as $namespace) {
+            if (str_starts_with($className, $namespace)) {
+                return true;
+            }
+        }
+        
+        return false;
     }
 }
