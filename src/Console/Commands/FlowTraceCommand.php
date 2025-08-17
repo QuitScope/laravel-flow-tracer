@@ -795,6 +795,11 @@ class FlowTraceCommand extends Command
             'endpoints' => []
         ];
 
+        // Ensure initial flow has internal analysis if requested
+        if ($this->option('internal') && !isset($initialFlow['internal_analysis'])) {
+            $initialFlow['internal_analysis'] = $this->performInternalAnalysis($initialFlow, $this->option('show-params'));
+        }
+
         $this->buildDeepTrace($initialFlow, $deepTrace, 0, $maxDepth, []);
         
         return $deepTrace;
@@ -883,8 +888,8 @@ class FlowTraceCommand extends Command
             if (isset($flow['uses_actions']) && !empty($flow['uses_actions'])) {
                 foreach ($flow['uses_actions'] as $actionData) {
                     if ($this->isValidDependency($actionData['action'])) {
-                        // Include use statements but with lower priority
-                        if (in_array($actionData['usage_type'], ['instantiation', 'dependency_injection', 'use statement'])) {
+                        // Include use statements and import statements
+                        if (in_array($actionData['usage_type'], ['instantiation', 'dependency_injection', 'use statement', 'import'])) {
                             $connections[] = [
                                 'target' => $actionData['action'],
                                 'type' => 'uses_action',
