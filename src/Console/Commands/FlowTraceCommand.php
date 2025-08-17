@@ -850,51 +850,37 @@ class FlowTraceCommand extends Command
         // Only include actual code dependencies, not false positives
         $connections = $this->findRealDependencies($flow);
         
-        // Legacy fallback for older analysis format
+        // Debug output
+        if ($this->option('debug-connections')) {
+            $className = class_basename($currentClass);
+            $this->line("🔍 DEBUG: Analyzing {$className} at depth {$currentDepth}");
+            $this->line("   Found " . count($connections) . " connections via internal analysis");
+            if (isset($flow['services'])) {
+                $this->line("   Legacy services available: " . count($flow['services']));
+            }
+        }
+        
+        // Legacy fallback - but be more restrictive
         if (empty($connections)) {
-            // 1. Actions used by this controller
+            // 1. Actions used by this controller - only if we have solid evidence
             if (isset($flow['uses_actions']) && !empty($flow['uses_actions'])) {
                 foreach ($flow['uses_actions'] as $actionData) {
                     if ($this->isValidDependency($actionData['action'])) {
-                        $connections[] = [
-                            'target' => $actionData['action'],
-                            'type' => 'uses_action',
-                            'usage_type' => $actionData['usage_type']
-                        ];
-                    }
-                }
-            }
-
-            // 2. Services used - only if they have actual instantiation/calls
-            if (isset($flow['services']) && !empty($flow['services'])) {
-                foreach ($flow['services'] as $service) {
-                    if (isset($service['class']) && $this->isValidDependency($service['class'])) {
-                        // Only include if there's evidence of actual usage
-                        if (isset($service['methods']) && !empty($service['methods'])) {
+                        // Only include if usage_type shows actual instantiation
+                        if (in_array($actionData['usage_type'], ['instantiation', 'dependency_injection'])) {
                             $connections[] = [
-                                'target' => $service['class'],
-                                'type' => 'uses_service',
-                                'service_type' => $service['type'] ?? 'unknown'
+                                'target' => $actionData['action'],
+                                'type' => 'uses_action',
+                                'usage_type' => $actionData['usage_type'],
+                                'evidence' => 'Legacy: ' . ($actionData['usage_type'] ?? 'unknown')
                             ];
                         }
                     }
                 }
             }
 
-            // 3. Models used - only with actual operations
-            if (isset($flow['models']) && !empty($flow['models'])) {
-                foreach ($flow['models'] as $model) {
-                    if (isset($model['class']) && $this->isValidDependency($model['class'])) {
-                        if (isset($model['operations']) && !empty($model['operations'])) {
-                            $connections[] = [
-                                'target' => $model['class'],
-                                'type' => 'uses_model',
-                                'operations' => $model['operations']
-                            ];
-                        }
-                    }
-                }
-            }
+            // Skip legacy service and model connections as they're often false positives
+            // Only rely on internal analysis for accurate results
         }
 
         $levelData['connections'] = $connections;
@@ -920,6 +906,12 @@ class FlowTraceCommand extends Command
                 // Only trace if it's a traceable class and not already visited at this depth
                 if ($this->isTraceableClass($targetClass) && !in_array($targetClass, $visited)) {
                     $subFlow = $this->flowParser->parseFullFlow($targetClass, 'controller');
+                    
+                    // Add internal analysis for better dependency detection if --internal is enabled
+                    if ($this->option('internal')) {
+                        $subFlow['internal_analysis'] = $this->performInternalAnalysis($subFlow, $this->option('show-params'));
+                    }
+                    
                     $this->buildDeepTrace($subFlow, $deepTrace, $currentDepth + 1, $maxDepth, $visited);
                 }
             } catch (\Exception $e) {
