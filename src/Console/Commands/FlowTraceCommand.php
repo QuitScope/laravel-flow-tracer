@@ -29,7 +29,9 @@ class FlowTraceCommand extends Command
                             {--stats : Show project statistics}
                             {--scan= : Scan specific directory for classes}
                             {--deep : Trace complete flow until no more connections found}
-                            {--max-deep=10 : Maximum depth for deep tracing (prevents infinite loops)}';
+                            {--max-deep=10 : Maximum depth for deep tracing (prevents infinite loops)}
+                            {--internal : Show internal method calls and detailed operations}
+                            {--show-params : Show method parameters (requires --internal)}';
 
     protected $description = 'Trace Laravel application flow and automatically generate PNG diagrams';
 
@@ -65,6 +67,8 @@ class FlowTraceCommand extends Command
         $scan = $this->option('scan');
         $deep = $this->option('deep');
         $maxDeep = (int) $this->option('max-deep');
+        $internal = $this->option('internal');
+        $showParams = $this->option('show-params');
 
         // Handle project statistics
         if ($stats) {
@@ -107,6 +111,14 @@ class FlowTraceCommand extends Command
                         $flow['circular_dependencies'] = $this->dependencyTracer->findCircularDependencies($targetClass);
                     }
                 }
+            }
+
+            // Handle internal analysis if requested
+            if ($internal) {
+                $this->info("🔬 Analyzing internal method calls...");
+                $flow['internal_analysis'] = $this->performInternalAnalysis($flow, $showParams);
+                $this->info("✅ Internal analysis completed!");
+                $this->newLine();
             }
 
             // Handle deep tracing if requested
@@ -356,6 +368,10 @@ class FlowTraceCommand extends Command
 
         if (isset($flow['uses_actions']) && !empty($flow['uses_actions'])) {
             $this->displayControllerActions($flow['uses_actions']);
+        }
+
+        if (isset($flow['internal_analysis']) && !empty($flow['internal_analysis'])) {
+            $this->displayInternalAnalysis($flow['internal_analysis']);
         }
 
         if (isset($flow['deep_trace']) && !empty($flow['deep_trace'])) {
@@ -1011,5 +1027,509 @@ class FlowTraceCommand extends Command
             'cycle_detected' => 'Circular dependency',
             default => $reason
         };
+    }
+
+    private function performInternalAnalysis(array $flow, bool $showParams): array
+    {
+        $analysis = [
+            'target_class' => $flow['controller'] ?? null,
+            'target_method' => $flow['action'] ?? null,
+            'methods' => [],
+            'method_calls' => [],
+            'internal_dependencies' => [],
+            'detailed_operations' => []
+        ];
+
+        if (!$analysis['target_class']) {
+            return $analysis;
+        }
+
+        try {
+            $classAnalysis = $this->codeAnalyzer->analyzeClass($analysis['target_class']);
+            
+            // Analyze the specific method or all methods
+            foreach ($classAnalysis['methods'] as $method) {
+                $methodName = $method['name'];
+                
+                // Focus on the target method or analyze all if no specific method
+                if ($analysis['target_method'] && $methodName !== $analysis['target_method']) {
+                    continue;
+                }
+
+                $internalMethod = $this->analyzeMethodInternals($method, $analysis['target_class'], $showParams);
+                $analysis['methods'][$methodName] = $internalMethod;
+                
+                // Collect method calls
+                $analysis['method_calls'] = array_merge(
+                    $analysis['method_calls'], 
+                    $internalMethod['method_calls']
+                );
+                
+                // Collect internal dependencies
+                $analysis['internal_dependencies'] = array_merge(
+                    $analysis['internal_dependencies'],
+                    $internalMethod['internal_calls']
+                );
+                
+                // Collect detailed operations
+                $analysis['detailed_operations'] = array_merge(
+                    $analysis['detailed_operations'],
+                    $internalMethod['operations']
+                );
+            }
+            
+            // Remove duplicates
+            $analysis['method_calls'] = array_unique($analysis['method_calls'], SORT_REGULAR);
+            $analysis['internal_dependencies'] = array_unique($analysis['internal_dependencies'], SORT_REGULAR);
+            $analysis['detailed_operations'] = array_unique($analysis['detailed_operations'], SORT_REGULAR);
+            
+        } catch (\Exception $e) {
+            $analysis['error'] = $e->getMessage();
+        }
+
+        return $analysis;
+    }
+
+    private function analyzeMethodInternals(array $method, string $className, bool $showParams): array
+    {
+        $internal = [
+            'method_name' => $method['name'],
+            'visibility' => $method['visibility'],
+            'parameters' => $showParams ? $method['parameters'] : [],
+            'return_type' => $method['return_type'],
+            'method_calls' => [],
+            'internal_calls' => [],
+            'operations' => [],
+            'line_count' => ($method['line_end'] ?? 0) - ($method['line_start'] ?? 0),
+            'complexity_indicators' => []
+        ];
+
+        if (!isset($method['source_analysis'])) {
+            return $internal;
+        }
+
+        $sourceAnalysis = $method['source_analysis'];
+
+        // Extract method source for detailed analysis
+        try {
+            $reflection = new \ReflectionClass($className);
+            $methodReflection = $reflection->getMethod($method['name']);
+            $methodSource = $this->getMethodSourceCode($methodReflection);
+            
+            $internal = array_merge($internal, $this->analyzeMethodSource($methodSource, $method['name']));
+            
+        } catch (\Exception $e) {
+            $internal['source_error'] = $e->getMessage();
+        }
+
+        // Add existing source analysis data
+        foreach (['database_operations', 'service_calls', 'model_operations', 'event_dispatches', 'job_dispatches'] as $key) {
+            if (!empty($sourceAnalysis[$key])) {
+                $internal['operations'] = array_merge($internal['operations'], array_map(function($op) use ($key) {
+                    return array_merge($op, ['category' => $key]);
+                }, $sourceAnalysis[$key]));
+            }
+        }
+
+        return $internal;
+    }
+
+    private function getMethodSourceCode(\ReflectionMethod $method): string
+    {
+        $filePath = $method->getFileName();
+        
+        if (!$filePath || !is_file($filePath)) {
+            return '';
+        }
+        
+        try {
+            $lines = file($filePath);
+            $startLine = $method->getStartLine() - 1;
+            $endLine = $method->getEndLine() - 1;
+            
+            if ($startLine < 0 || $endLine >= count($lines)) {
+                return '';
+            }
+            
+            return implode('', array_slice($lines, $startLine, $endLine - $startLine + 1));
+        } catch (\Exception $e) {
+            return '';
+        }
+    }
+
+    private function analyzeMethodSource(string $source, string $methodName): array
+    {
+        $analysis = [
+            'method_calls' => [],
+            'internal_calls' => [],
+            'variable_assignments' => [],
+            'conditional_statements' => [],
+            'loops' => [],
+            'try_catch_blocks' => [],
+            'complexity_indicators' => []
+        ];
+
+        if (empty($source)) {
+            return $analysis;
+        }
+
+        // Method calls analysis
+        $analysis['method_calls'] = $this->findMethodCalls($source);
+        $analysis['internal_calls'] = $this->findInternalCalls($source);
+        
+        // Control flow analysis
+        $analysis['conditional_statements'] = $this->findConditionalStatements($source);
+        $analysis['loops'] = $this->findLoops($source);
+        $analysis['try_catch_blocks'] = $this->findTryCatchBlocks($source);
+        
+        // Variable assignments
+        $analysis['variable_assignments'] = $this->findVariableAssignments($source);
+        
+        // Complexity indicators
+        $analysis['complexity_indicators'] = $this->calculateComplexityIndicators($source);
+
+        return $analysis;
+    }
+
+    private function findMethodCalls(string $source): array
+    {
+        $calls = [];
+        
+        // Find method calls like $this->methodName(), $object->methodName(), Class::methodName()
+        $patterns = [
+            '/\$this\s*->\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'internal_method',
+            '/\$([a-zA-Z_][a-zA-Z0-9_]*)\s*->\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'instance_method',
+            '/([A-Z][a-zA-Z0-9_\\\\]*)::\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'static_method',
+            '/([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'function_call'
+        ];
+        
+        foreach ($patterns as $pattern => $type) {
+            if (preg_match_all($pattern, $source, $matches, PREG_SET_ORDER)) {
+                foreach ($matches as $match) {
+                    switch ($type) {
+                        case 'internal_method':
+                            $calls[] = [
+                                'type' => 'Internal Method',
+                                'method' => $match[1],
+                                'target' => '$this',
+                                'call' => $match[0]
+                            ];
+                            break;
+                        case 'instance_method':
+                            $calls[] = [
+                                'type' => 'Instance Method',
+                                'variable' => $match[1],
+                                'method' => $match[2],
+                                'call' => $match[0]
+                            ];
+                            break;
+                        case 'static_method':
+                            $calls[] = [
+                                'type' => 'Static Method',
+                                'class' => $match[1],
+                                'method' => $match[2],
+                                'call' => $match[0]
+                            ];
+                            break;
+                        case 'function_call':
+                            // Filter out common PHP functions and keywords
+                            if (!in_array($match[1], ['if', 'for', 'while', 'foreach', 'switch', 'return', 'echo', 'print', 'isset', 'empty', 'array', 'count'])) {
+                                $calls[] = [
+                                    'type' => 'Function Call',
+                                    'function' => $match[1],
+                                    'call' => $match[0]
+                                ];
+                            }
+                            break;
+                    }
+                }
+            }
+        }
+        
+        return $calls;
+    }
+
+    private function findInternalCalls(string $source): array
+    {
+        $calls = [];
+        
+        // Find calls to other classes/services
+        $patterns = [
+            '/new\s+([A-Z][a-zA-Z0-9_\\\\]+)\s*\(/' => 'instantiation',
+            '/([A-Z][a-zA-Z0-9_\\\\]+)::\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/' => 'static_call'
+        ];
+        
+        foreach ($patterns as $pattern => $type) {
+            if (preg_match_all($pattern, $source, $matches, PREG_SET_ORDER)) {
+                foreach ($matches as $match) {
+                    $calls[] = [
+                        'type' => $type,
+                        'class' => $match[1],
+                        'method' => $match[2] ?? '__construct',
+                        'call' => $match[0]
+                    ];
+                }
+            }
+        }
+        
+        return $calls;
+    }
+
+    private function findConditionalStatements(string $source): array
+    {
+        $conditionals = [];
+        
+        $patterns = [
+            '/\bif\s*\(/' => 'if',
+            '/\belseif\s*\(/' => 'elseif', 
+            '/\belse\b/' => 'else',
+            '/\bswitch\s*\(/' => 'switch',
+            '/\bcase\s+/' => 'case',
+            '/\?.*:/' => 'ternary'
+        ];
+        
+        foreach ($patterns as $pattern => $type) {
+            $count = preg_match_all($pattern, $source);
+            if ($count > 0) {
+                $conditionals[] = [
+                    'type' => $type,
+                    'count' => $count
+                ];
+            }
+        }
+        
+        return $conditionals;
+    }
+
+    private function findLoops(string $source): array
+    {
+        $loops = [];
+        
+        $patterns = [
+            '/\bfor\s*\(/' => 'for',
+            '/\bforeach\s*\(/' => 'foreach',
+            '/\bwhile\s*\(/' => 'while',
+            '/\bdo\s*\{/' => 'do-while'
+        ];
+        
+        foreach ($patterns as $pattern => $type) {
+            $count = preg_match_all($pattern, $source);
+            if ($count > 0) {
+                $loops[] = [
+                    'type' => $type,
+                    'count' => $count
+                ];
+            }
+        }
+        
+        return $loops;
+    }
+
+    private function findTryCatchBlocks(string $source): array
+    {
+        $blocks = [];
+        
+        $tryCount = preg_match_all('/\btry\s*\{/', $source);
+        $catchCount = preg_match_all('/\bcatch\s*\(/', $source);
+        $finallyCount = preg_match_all('/\bfinally\s*\{/', $source);
+        
+        if ($tryCount > 0) {
+            $blocks[] = ['type' => 'try', 'count' => $tryCount];
+        }
+        if ($catchCount > 0) {
+            $blocks[] = ['type' => 'catch', 'count' => $catchCount];
+        }
+        if ($finallyCount > 0) {
+            $blocks[] = ['type' => 'finally', 'count' => $finallyCount];
+        }
+        
+        return $blocks;
+    }
+
+    private function findVariableAssignments(string $source): array
+    {
+        $assignments = [];
+        
+        // Simple variable assignments
+        if (preg_match_all('/\$([a-zA-Z_][a-zA-Z0-9_]*)\s*=/', $source, $matches)) {
+            $variables = array_count_values($matches[1]);
+            foreach ($variables as $var => $count) {
+                $assignments[] = [
+                    'variable' => '$' . $var,
+                    'assignments' => $count
+                ];
+            }
+        }
+        
+        return $assignments;
+    }
+
+    private function calculateComplexityIndicators(string $source): array
+    {
+        $indicators = [];
+        
+        // Count various complexity indicators
+        $indicators['total_lines'] = substr_count($source, "\n") + 1;
+        $indicators['cyclomatic_complexity'] = $this->calculateCyclomaticComplexity($source);
+        $indicators['nesting_depth'] = $this->calculateNestingDepth($source);
+        $indicators['method_calls_count'] = preg_match_all('/\w+\s*\(/', $source);
+        
+        return $indicators;
+    }
+
+    private function calculateCyclomaticComplexity(string $source): int
+    {
+        // Basic cyclomatic complexity calculation
+        $complexity = 1; // Base complexity
+        
+        $patterns = ['/\bif\b/', '/\belse\b/', '/\bfor\b/', '/\bforeach\b/', '/\bwhile\b/', '/\bcase\b/', '/\bcatch\b/'];
+        
+        foreach ($patterns as $pattern) {
+            $complexity += preg_match_all($pattern, $source);
+        }
+        
+        return $complexity;
+    }
+
+    private function calculateNestingDepth(string $source): int
+    {
+        $depth = 0;
+        $maxDepth = 0;
+        
+        for ($i = 0; $i < strlen($source); $i++) {
+            if ($source[$i] === '{') {
+                $depth++;
+                $maxDepth = max($maxDepth, $depth);
+            } elseif ($source[$i] === '}') {
+                $depth--;
+            }
+        }
+        
+        return $maxDepth;
+    }
+
+    private function displayInternalAnalysis(array $analysis): void
+    {
+        $this->info("\n🔬 Internal Method Analysis:");
+        $this->line("═══════════════════════════════════════════════════════════");
+
+        $targetClass = class_basename($analysis['target_class']);
+        $targetMethod = $analysis['target_method'] ?: 'All Methods';
+        
+        $this->info("🎯 Target: {$targetClass}::{$targetMethod}");
+        $this->newLine();
+
+        if (isset($analysis['error'])) {
+            $this->error("Analysis Error: " . $analysis['error']);
+            return;
+        }
+
+        // Display each method's internal analysis
+        foreach ($analysis['methods'] as $methodName => $methodData) {
+            $this->displayMethodInternals($methodName, $methodData);
+        }
+
+        // Summary of all method calls
+        if (!empty($analysis['method_calls'])) {
+            $this->info("\n📞 All Method Calls Summary:");
+            $callTypes = [];
+            foreach ($analysis['method_calls'] as $call) {
+                $callTypes[$call['type']] = ($callTypes[$call['type']] ?? 0) + 1;
+            }
+            
+            $tableData = [];
+            foreach ($callTypes as $type => $count) {
+                $tableData[] = [$type, $count];
+            }
+            $this->table(['Call Type', 'Count'], $tableData);
+        }
+
+        // Summary of detailed operations
+        if (!empty($analysis['detailed_operations'])) {
+            $this->info("\n⚙️ Detailed Operations Summary:");
+            $opCategories = [];
+            foreach ($analysis['detailed_operations'] as $op) {
+                $category = $op['category'] ?? 'unknown';
+                $opCategories[$category] = ($opCategories[$category] ?? 0) + 1;
+            }
+            
+            $tableData = [];
+            foreach ($opCategories as $category => $count) {
+                $tableData[] = [ucfirst(str_replace('_', ' ', $category)), $count];
+            }
+            $this->table(['Operation Category', 'Count'], $tableData);
+        }
+    }
+
+    private function displayMethodInternals(string $methodName, array $methodData): void
+    {
+        $this->info("🔍 Method: {$methodName}");
+        
+        // Basic method info
+        $this->table(['Property', 'Value'], [
+            ['Visibility', $methodData['visibility']],
+            ['Return Type', $methodData['return_type']],
+            ['Line Count', $methodData['line_count']],
+            ['Parameters', count($methodData['parameters'])]
+        ]);
+
+        // Complexity indicators
+        if (!empty($methodData['complexity_indicators'])) {
+            $this->info("  📊 Complexity Metrics:");
+            $complexity = $methodData['complexity_indicators'];
+            $this->table(['Metric', 'Value'], [
+                ['Cyclomatic Complexity', $complexity['cyclomatic_complexity'] ?? 'N/A'],
+                ['Nesting Depth', $complexity['nesting_depth'] ?? 'N/A'],
+                ['Method Calls Count', $complexity['method_calls_count'] ?? 'N/A']
+            ]);
+        }
+
+        // Method calls
+        if (!empty($methodData['method_calls'])) {
+            $this->info("  📞 Method Calls:");
+            $tableData = [];
+            foreach (array_slice($methodData['method_calls'], 0, 10) as $call) { // Limit to first 10
+                $target = $call['target'] ?? $call['class'] ?? $call['variable'] ?? $call['function'] ?? 'N/A';
+                $method = $call['method'] ?? $call['function'] ?? 'N/A';
+                $tableData[] = [$call['type'], $target, $method];
+            }
+            $this->table(['Type', 'Target', 'Method/Function'], $tableData);
+            
+            if (count($methodData['method_calls']) > 10) {
+                $this->line("  ... and " . (count($methodData['method_calls']) - 10) . " more calls");
+            }
+        }
+
+        // Control flow
+        $controlFlow = array_merge(
+            $methodData['conditional_statements'] ?? [],
+            $methodData['loops'] ?? [],
+            $methodData['try_catch_blocks'] ?? []
+        );
+        
+        if (!empty($controlFlow)) {
+            $this->info("  🔀 Control Flow:");
+            $tableData = [];
+            foreach ($controlFlow as $flow) {
+                $tableData[] = [ucfirst($flow['type']), $flow['count']];
+            }
+            $this->table(['Type', 'Count'], $tableData);
+        }
+
+        // Operations
+        if (!empty($methodData['operations'])) {
+            $this->info("  ⚙️ Operations:");
+            foreach (array_slice($methodData['operations'], 0, 5) as $op) { // Limit to first 5
+                $type = $op['type'] ?? $op['category'] ?? 'Operation';
+                $pattern = $op['pattern'] ?? $op['model'] ?? $op['class'] ?? 'N/A';
+                $this->line("    - {$type}: {$pattern}");
+            }
+            
+            if (count($methodData['operations']) > 5) {
+                $this->line("    ... and " . (count($methodData['operations']) - 5) . " more operations");
+            }
+        }
+
+        $this->newLine();
     }
 }
