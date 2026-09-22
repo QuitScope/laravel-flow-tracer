@@ -3,7 +3,6 @@
 namespace LaravelFlowTracer\Services;
 
 use Illuminate\Support\Facades\Route;
-use Illuminate\Routing\Router;
 
 class FlowParser
 {
@@ -16,6 +15,10 @@ class FlowParser
 
     public function parseFullFlow(string $startPoint, string $type = 'route'): array
     {
+        if (!in_array($type, ['route', 'url', 'controller'], true)) {
+            throw new \InvalidArgumentException("Unsupported flow type: {$type}");
+        }
+
         $flow = [
             'start_point' => $startPoint,
             'type' => $type,
@@ -259,11 +262,6 @@ class FlowParser
         $flow['services'] = array_merge(
             $flow['services'],
             $sourceAnalysis['service_calls'] ?? []
-        );
-
-        $flow['models'] = array_merge(
-            $flow['models'],
-            $sourceAnalysis['model_operations'] ?? []
         );
 
         return $flow;

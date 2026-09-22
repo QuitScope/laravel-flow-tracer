@@ -5,7 +5,7 @@
 ### 1. Install Package
 
 ```bash
-composer require yourname/laravel-flow-tracer
+composer require quitscope/laravel-flow-tracer
 ```
 
 ### 2. Install Graphviz

@@ -1,232 +1,196 @@
 # Laravel Flow Tracer
 
-🔍 **Powerful Laravel package to trace and visualize application flows with automatic high-quality PNG diagrams**
+Laravel Flow Tracer is a Laravel package for inspecting application flows from a named route, URL, or controller action. It combines route metadata with source-level analysis and can present the result in the console, as JSON, or as Graphviz and Mermaid diagrams.
 
-Laravel Flow Tracer analyzes your Laravel application's request flow from routes through middleware, controllers, services, actions, and models, automatically generating beautiful flow diagrams using Graphviz.
+## Preview
 
-![Flow Diagram Example](https://via.placeholder.com/800x600/2563eb/ffffff?text=Flow+Diagram+Example)
+The diagram below is the Mermaid export produced by the package for `LaravelFlowTracer\Services\FlowVisualizer@exportFlow`. The checked-in source is available at [`docs/examples/flow-example.mmd`](docs/examples/flow-example.mmd).
+
+```mermaid
+graph TD
+    C0["🎯 FlowVisualizer::exportFlow"]
+    S1["⚙️ Instance Method Call: this"]
+    S2["⚙️ Instance Method Call: this"]
+    S3["⚙️ Instance Method Call: this"]
+
+    C0 --> S1
+    C0 --> S2
+    C0 --> S3
+```
 
 ## Features
 
-✨ **Comprehensive Flow Analysis**
-- Route → Middleware → Controller → Services → Models
-- Domain-Driven Design (DDD) support
-- Action and Service detection
-- Model operations tracking
-
-🎨 **Professional Visualizations**
-- High-resolution PNG diagrams (300 DPI)
-- Automatic caller detection ("Called From" information)
-- Color-coded node types with emojis
-- Graphviz-powered professional layouts
-
-🚀 **Easy to Use**
-- Single Artisan command
-- Automatic diagram generation
-- Support for routes, actions, and URLs
-- JSON output for programmatic use
-
-## Installation
-
-### 1. Install via Composer
-
-```bash
-composer require yourname/laravel-flow-tracer
-```
-
-### 2. Install Graphviz
-
-**Windows (via winget):**
-```bash
-winget install Graphviz.Graphviz
-```
-
-**macOS (via Homebrew):**
-```bash
-brew install graphviz
-```
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install graphviz
-```
-
-### 3. Publish Configuration (Optional)
-
-```bash
-php artisan vendor:publish --provider="LaravelFlowTracer\FlowTracerServiceProvider" --tag="config"
-```
-
-## Usage
-
-### Basic Commands
-
-**Trace a named route:**
-```bash
-php artisan flow:trace --route="posts.index"
-```
-
-**Trace a controller action:**
-```bash
-php artisan flow:trace --action="CreateTaskAction"
-```
-
-**Trace a URL path:**
-```bash
-php artisan flow:trace --url="/api/v1/posts"
-```
-
-### Advanced Options
-
-**Get JSON output:**
-```bash
-php artisan flow:trace --route="posts.index" --format=json
-```
-
-**Custom output path:**
-```bash
-php artisan flow:trace --route="posts.index" --output="/path/to/diagram.png"
-```
-
-**Disable automatic PNG generation:**
-```bash
-php artisan flow:trace --route="posts.index" --no-png
-```
-
-## Example Output
-
-### Console Output
-```
-Laravel Flow Tracer Results
-============================
-
-🔗 Route Information:
-+------------+--------------+
-| Property   | Value        |
-+------------+--------------+
-| Name       | posts.index  |
-| URI        | api/v1/posts |
-| Methods    | GET, HEAD    |
-+------------+--------------+
-
-🛡️ Middleware Stack:
-+--------------+----------------------+
-| Middleware   | Type                 |
-+--------------+----------------------+
-| api          | API Middleware Group |
-| auth:sanctum | Authentication       |
-+--------------+----------------------+
-
-🎯 Controller Action:
-+------------+---------------------------------+
-| Property   | Value                           |
-+------------+---------------------------------+
-| Controller | App\Http\Controllers\PostController |
-| Action     | index                           |
-+------------+---------------------------------+
-
-🖼️ Flow diagram automatically saved: storage/app/flow-diagrams/flow-posts-index-1234567890.png
-```
-
-### Visual Diagram Features
-
-- **Route Node**: Blue, shows route name, URI, and HTTP methods
-- **Middleware Nodes**: Orange, shows middleware name and type
-- **Controller Node**: Green, shows controller and action
-- **Action Node**: Purple, for Domain Actions with caller information
-- **Service Nodes**: Yellow, shows service type and methods
-- **Model Nodes**: Pink, shows model name and operations
-- **Called From**: Teal, shows which controllers/routes call an action
-
-## Configuration
-
-The package comes with sensible defaults, but you can customize it via `config/flow-tracer.php`:
-
-```php
-return [
-    // Output directory for diagrams
-    'output_directory' => storage_path('app/flow-diagrams'),
-    
-    // Graphviz settings
-    'graphviz' => [
-        'dot_path' => null, // Auto-detect or specify path
-        'dpi' => 300,       // High resolution
-        'size' => null,     // Auto-sizing
-    ],
-    
-    // Search paths for your application
-    'search_paths' => [
-        base_path('app'),
-        base_path('src'),
-    ],
-    
-    // Visual styling
-    'styling' => [
-        'node' => ['fontsize' => 14, 'width' => 3.0, 'height' => 1.5],
-        'edge' => ['fontsize' => 12, 'penwidth' => 2],
-        'graph' => ['fontsize' => 18, 'pad' => 1.0],
-    ],
-    
-    // Feature toggles
-    'features' => [
-        'auto_png_generation' => true,
-        'caller_detection' => true,
-        'dependency_analysis' => true,
-        'model_relationships' => true,
-    ],
-];
-```
-
-## Architecture Support
-
-Laravel Flow Tracer works with various Laravel application architectures:
-
-- **Standard Laravel**: Controllers in `app/Http/Controllers`
-- **Domain-Driven Design (DDD)**: Actions, Services, Queries in `src/` or custom directories
-- **Modular Applications**: Multiple namespace structures
-- **API Applications**: Full middleware and controller analysis
+- Trace a named route, a URL path, or a controller/action target.
+- Collect route URI, HTTP methods, parameters, and middleware.
+- Inspect controller methods for imported dependencies, service/action/query calls, model operations, database operations, events, and jobs.
+- Trace forward and backward dependencies, calculate impact, and identify circular dependencies.
+- Inspect internal method calls and optionally perform a bounded deep trace.
+- Export diagrams as PNG, SVG, Graphviz DOT, or Mermaid; output the flow data as JSON for automation.
+- Report project-level counts for controllers, services, models, and actions.
 
 ## Requirements
 
-- PHP 8.1+
-- Laravel 10.0+ | 11.0+ | 12.0+
-- Graphviz (for diagram generation)
+- PHP 8.1 or later.
+- Laravel components 10, 11, or 12.
+- [Graphviz](https://graphviz.org/) when creating PNG, SVG, or DOT exports. It is not needed for table, JSON, or Mermaid output.
 
-## Troubleshooting
+## Installation
 
-### Graphviz not found
-If you get "dot command not found" errors:
+Install the package in a Laravel application:
 
-1. **Verify installation**: `dot -V`
-2. **Check PATH**: Ensure Graphviz bin directory is in your system PATH
-3. **Set manual path**: Update `config/flow-tracer.php` with explicit `dot_path`
-
-### Permission issues
-Ensure the output directory is writable:
 ```bash
-chmod 755 storage/app/flow-diagrams
+composer require quitscope/laravel-flow-tracer
 ```
 
-### Complex flows
-For very large applications, you may need to:
-- Increase PHP memory limit
-- Adjust `max_depth` in configuration
-- Use `--no-png` for console-only output
+Laravel package discovery registers the service provider and command automatically. To customize the defaults, publish the configuration file:
+
+```bash
+php artisan vendor:publish --provider="LaravelFlowTracer\FlowTracerServiceProvider" --tag=config
+```
+
+### Install Graphviz
+
+Graphviz provides the `dot` executable used for image and DOT exports.
+
+```bash
+# macOS (Homebrew)
+brew install graphviz
+
+# Ubuntu/Debian
+sudo apt-get install graphviz
+
+# Windows (winget)
+winget install Graphviz.Graphviz
+```
+
+Verify that it is reachable from the environment running Artisan:
+
+```bash
+dot -V
+```
+
+If it is not on `PATH`, set `graphviz.dot_path` in the published configuration.
+
+## Usage
+
+Choose exactly one starting point:
+
+```bash
+# Named route
+php artisan flow:trace --route=posts.index
+
+# URL path (the command attempts GET, POST, PUT, PATCH, and DELETE)
+php artisan flow:trace --url=/api/posts
+
+# Controller method or invokable/action class
+php artisan flow:trace --action='App\Http\Controllers\PostController@index'
+```
+
+By default, the command prints a table and writes a PNG below `storage/app/flow-diagrams`. Add `--no-png` when Graphviz is unavailable or when only structured output is needed.
+
+### Command options
+
+| Option | Description |
+| --- | --- |
+| `--action=` | Trace a controller action or class. Accepts `Class@method`; an omitted method is resolved as an invokable/action method when possible. |
+| `--route=` | Trace a named Laravel route. |
+| `--url=` | Trace a URL path. |
+| `--forward` | Include the forward dependency tree for the traced controller. |
+| `--backward` | Include classes that depend on the traced controller. |
+| `--impact` | Include forward/backward impact counts and a risk level. |
+| `--circular` | Search the dependency graph for circular dependencies. |
+| `--depth=3` | Maximum depth used by forward and backward dependency tracing. |
+| `--format=table` | Console format: `table` or `json`. |
+| `--export=` | Additional export format: `png`, `svg`, `dot`, or `mermaid`. |
+| `--no-png` | Do not create the automatic PNG output. |
+| `--output=` | Output file path for the automatic PNG export. |
+| `--stats` | Show project statistics instead of tracing a start point. |
+| `--scan=` | Directory to scan with `--stats`; otherwise the application base path is scanned. |
+| `--deep` | Follow detected connections beyond the initial flow. |
+| `--max-deep=10` | Maximum depth for `--deep`. |
+| `--internal` | Include internal method calls and detailed operations. |
+| `--show-params` | Include method parameters in internal analysis; requires `--internal`. |
+| `--debug-connections` | Print diagnostic information about deep-trace connection detection. |
+
+### JSON output
+
+Use JSON when the result will be consumed by another tool:
+
+```bash
+php artisan flow:trace --route=posts.index --format=json --no-png
+```
+
+The JSON document contains the start point, route and middleware metadata when present, controller/action, detected services and models, database operations, events, jobs, and any requested dependency analysis.
+
+### Diagram output
+
+The command writes a PNG by default. Set a destination explicitly when it should be retained as project documentation:
+
+```bash
+php artisan flow:trace --route=posts.index --output=docs/flow-posts-index.png
+```
+
+Create an additional format with `--export`:
+
+```bash
+php artisan flow:trace --route=posts.index --export=svg
+php artisan flow:trace --route=posts.index --export=dot
+php artisan flow:trace --route=posts.index --export=mermaid --no-png
+```
+
+`--output` controls the automatic PNG. Additional exports use the package's default directory, `storage/app/flow-diagrams`.
+
+## Configuration
+
+The published `config/flow-tracer.php` supports these settings:
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `output_directory` | `storage_path('app/flow-diagrams')` | Default diagram directory. |
+| `graphviz.dot_path` | `null` | Explicit path to `dot`; `null` uses platform detection. |
+| `graphviz.dpi` | `300` | Graphviz rasterization DPI. |
+| `graphviz.size` | `null` | Optional Graphviz size argument. |
+| `search_paths` | `app`, `src` | Application paths intended for source discovery. |
+| `styling` | node, edge, and graph values | Visual defaults for generated diagrams. |
+| `max_depth` | `3` | Configured analysis-depth default. |
+| `features` | enabled flags | Feature flags for PNG generation, caller detection, dependency analysis, and model relationships. |
+
+## Supported application structures
+
+The tracer discovers conventional Laravel controllers under `App\Http\Controllers` and searches common source roots including `app`, `src`, `Application`, `Domain`, `domain`, `lib`, and `packages` when resolving classes. Source analysis recognizes class names and imports that follow common Controller, Service, Action, Query, Repository, Handler, and Model naming conventions. This makes it suitable for conventional Laravel applications as well as applications that organize domain or application code in separate source directories.
+
+## Example
+
+To inspect a route, add dependency context, and avoid writing an image during an exploratory run:
+
+```bash
+php artisan flow:trace --route=posts.index --forward --depth=2 --internal --no-png
+```
+
+For project-level statistics:
+
+```bash
+php artisan flow:trace --stats --scan=app
+```
+
+## Tests
+
+Run the package test suite after installing development dependencies:
+
+```bash
+composer test
+```
+
+If your application does not define a Composer `test` script, invoke PHPUnit directly:
+
+```bash
+vendor/bin/phpunit
+```
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. Please open an issue for substantial changes, keep pull requests focused, add or update tests for behavior changes, and run the test suite before submitting a pull request.
 
 ## License
 
-The MIT License (MIT). Please see [License File](LICENSE.md) for more information.
-
-## Credits
-
-- **[Your Name](https://github.com/yourusername)**
-- Powered by [Graphviz](https://graphviz.org/) for professional diagram generation
-- Built for Laravel developers who love clean, visual code analysis
-
----
-
-**Made with ❤️ for the Laravel community**
+Laravel Flow Tracer is released under the [MIT License](LICENSE.md).

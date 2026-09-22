@@ -23,7 +23,7 @@ class FlowTraceCommand extends Command
                             {--circular : Find circular dependencies}
                             {--depth=3 : Maximum depth for tracing}
                             {--format=table : Output format (table, json)}
-                            {--export= : Export visual diagram (svg, mermaid, dot)}
+                            {--export= : Export visual diagram (png, svg, mermaid, dot)}
                             {--no-png : Disable automatic PNG generation}
                             {--output= : Output file path for PNG}
                             {--stats : Show project statistics}
@@ -71,6 +71,11 @@ class FlowTraceCommand extends Command
         $internal = $this->option('internal');
         $showParams = $this->option('show-params');
         $debugConnections = $this->option('debug-connections');
+
+        if (!in_array($format, ['table', 'json'], true)) {
+            $this->error("Unsupported output format: {$format}. Supported formats: table, json");
+            return 1;
+        }
 
         // Handle project statistics
         if ($stats) {
@@ -528,7 +533,7 @@ class FlowTraceCommand extends Command
     {
         $mermaidDiagram = $this->visualizer->generateMermaidDiagram($flow);
         
-        $outputFile = $outputPath ?: storage_path('app/flow-diagrams/flow-' . time() . '.mmd');
+        $outputFile = $outputPath ?: $this->diagramDirectory() . '/flow-' . time() . '.mmd';
         $this->ensureDirectoryExists(dirname($outputFile));
         
         file_put_contents($outputFile, $mermaidDiagram);
@@ -546,7 +551,7 @@ class FlowTraceCommand extends Command
     {
         $timestamp = time();
         $defaultName = "flow-{$timestamp}";
-        $outputFile = $outputPath ?: storage_path("app/flow-diagrams/{$defaultName}.{$format}");
+        $outputFile = $outputPath ?: $this->diagramDirectory() . "/{$defaultName}.{$format}";
         
         $this->ensureDirectoryExists(dirname($outputFile));
         
@@ -573,7 +578,7 @@ class FlowTraceCommand extends Command
         try {
             $timestamp = time();
             $defaultName = "flow-{$timestamp}";
-            $outputFile = $outputPath ?: storage_path("app/flow-diagrams/{$defaultName}.png");
+            $outputFile = $outputPath ?: $this->diagramDirectory() . "/{$defaultName}.png";
             
             $this->ensureDirectoryExists(dirname($outputFile));
             
@@ -631,7 +636,7 @@ class FlowTraceCommand extends Command
             $timestamp = time();
             $flowName = $this->getFlowName($flow);
             $filename = "flow-{$flowName}-{$timestamp}";
-            $outputFile = $outputPath ?: storage_path("app/flow-diagrams/{$filename}.png");
+            $outputFile = $outputPath ?: $this->diagramDirectory() . "/{$filename}.png";
             
             $this->ensureDirectoryExists(dirname($outputFile));
             
@@ -655,6 +660,11 @@ class FlowTraceCommand extends Command
         }
         
         return 'unknown';
+    }
+
+    private function diagramDirectory(): string
+    {
+        return config('flow-tracer.output_directory', storage_path('app/flow-diagrams'));
     }
 
     private function showProjectStatistics(string $projectPath): void
