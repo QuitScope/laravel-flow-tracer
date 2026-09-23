@@ -259,10 +259,14 @@ class FlowParser
         $flow['events'] = $sourceAnalysis['event_dispatches'] ?? [];
         $flow['jobs'] = $sourceAnalysis['job_dispatches'] ?? [];
 
-        $flow['services'] = array_merge(
-            $flow['services'],
-            $sourceAnalysis['service_calls'] ?? []
+        // Only calls that name a class are useful here. Injected services are added
+        // by findRelatedServices(), and "$var->method()" matches are too broad.
+        $classCalls = array_filter(
+            $sourceAnalysis['service_calls'] ?? [],
+            fn (array $call) => in_array($call['type'], ['Service Instantiation', 'Static Service Call'], true)
         );
+
+        $flow['services'] = array_merge($flow['services'], array_values($classCalls));
 
         return $flow;
     }
