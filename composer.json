@@ -1,14 +1,14 @@
 {
     "name": "quitscope/laravel-flow-tracer",
-    "description": "A powerful Laravel package to trace and visualize application flows with automatic high-quality PNG diagrams using Graphviz",
-    "keywords": ["laravel", "flow", "tracer", "visualization", "diagram", "graphviz", "ddd", "architecture"],
+    "description": "Trace Laravel request flows and export Graphviz diagrams from routes, controller actions, services, and models.",
+    "keywords": ["laravel", "flow", "tracing", "visualization", "diagram", "graphviz", "architecture"],
     "homepage": "https://github.com/quitscope/laravel-flow-tracer",
     "type": "library",
     "license": "MIT",
     "authors": [
         {
             "name": "Dustin Aßmann",
-            "email": "your.email@example.com",
+            "email": "quitscope@outlook.de",
             "homepage": "https://github.com/quitscope"
         }
     ],
@@ -20,8 +20,8 @@
         "symfony/process": "^6.0|^7.0"
     },
     "require-dev": {
-        "phpunit/phpunit": "^10.0",
-        "orchestra/testbench": "^8.0|^9.0"
+        "phpunit/phpunit": "^10.5|^11.0",
+        "orchestra/testbench": "^8.0|^9.0|^10.0"
     },
     "autoload": {
         "psr-4": {
@@ -33,6 +33,9 @@
             "LaravelFlowTracer\\Tests\\": "tests/"
         }
     },
+    "scripts": {
+        "test": "phpunit"
+    },
     "extra": {
         "laravel": {
             "providers": [
@@ -41,12 +44,5 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true,
-    "repositories": {
-        "packagist.org": false,
-        "private-packagist": {
-            "type": "composer",
-            "url": "https://repo.packagist.com/paradise/"
-        }
-    }
+    "prefer-stable": true
 }

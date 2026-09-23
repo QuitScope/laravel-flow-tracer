@@ -43,7 +43,7 @@ class FlowVisualizer
         $allConnections = [];
         
         // Generate title
-        $title = $this->getFlowTitle($flow);
+        $title = $this->escapeDotLabel($this->getFlowTitle($flow));
         $dot .= "    label=\"{$title}\";\n";
         $dot .= "    labelloc=\"t\";\n\n";
 
@@ -57,9 +57,12 @@ class FlowVisualizer
             foreach ($flow['called_from'] as $caller) {
                 $nodeKey = "node{$nodeId}";
                 if ($caller['type'] === 'route') {
-                    $dot .= "    {$nodeKey} [label=\"📍 Called From Route\\n{$caller['name']}\\n{$caller['uri']}\", fillcolor=\"#17a2b8\", fontcolor=\"white\"];\n";
+                    $name = $this->escapeDotLabel((string) ($caller['name'] ?? 'unnamed'));
+                    $uri = $this->escapeDotLabel((string) ($caller['uri'] ?? ''));
+                    $dot .= "    {$nodeKey} [label=\"📍 Called From Route\\n{$name}\\n{$uri}\", fillcolor=\"#17a2b8\", fontcolor=\"white\"];\n";
                 } else {
                     $callerName = class_basename($caller['class']);
+                    $callerName = $this->escapeDotLabel($callerName);
                     $dot .= "    {$nodeKey} [label=\"📍 Called From\\n{$callerName}\", fillcolor=\"#17a2b8\", fontcolor=\"white\"];\n";
                 }
                 $currentLevelNodes[] = $nodeKey;
@@ -70,9 +73,9 @@ class FlowVisualizer
 
         // Route
         if (isset($flow['route'])) {
-            $routeName = $flow['route']['name'] ?? 'unnamed';
-            $routeUri = $flow['route']['uri'] ?? '';
-            $routeMethods = implode(', ', $flow['route']['methods'] ?? []);
+            $routeName = $this->escapeDotLabel((string) ($flow['route']['name'] ?? 'unnamed'));
+            $routeUri = $this->escapeDotLabel((string) ($flow['route']['uri'] ?? ''));
+            $routeMethods = $this->escapeDotLabel(implode(', ', $flow['route']['methods'] ?? []));
             
             $nodeKey = "node{$nodeId}";
             $dot .= "    {$nodeKey} [label=\"🔗 Route\\n{$routeName}\\n{$routeUri}\\n[{$routeMethods}]\", fillcolor=\"#3498db\", fontcolor=\"white\"];\n";
@@ -85,7 +88,9 @@ class FlowVisualizer
             $currentLevelNodes = [];
             foreach ($flow['middleware'] as $middleware) {
                 $nodeKey = "node{$nodeId}";
-                $dot .= "    {$nodeKey} [label=\"🛡️ {$middleware['name']}\\n({$middleware['type']})\", fillcolor=\"#e67e22\", fontcolor=\"white\"];\n";
+                $name = $this->escapeDotLabel((string) ($middleware['name'] ?? 'Middleware'));
+                $type = $this->escapeDotLabel((string) ($middleware['type'] ?? 'Custom'));
+                $dot .= "    {$nodeKey} [label=\"🛡️ {$name}\\n({$type})\", fillcolor=\"#e67e22\", fontcolor=\"white\"];\n";
                 $currentLevelNodes[] = $nodeKey;
                 $nodeId++;
             }
@@ -101,8 +106,8 @@ class FlowVisualizer
 
         // Controller/Action
         if (isset($flow['controller'])) {
-            $controllerName = class_basename($flow['controller']);
-            $action = $flow['action'] ?? '__invoke';
+            $controllerName = $this->escapeDotLabel(class_basename($flow['controller']));
+            $action = $this->escapeDotLabel((string) ($flow['action'] ?? '__invoke'));
             
             $nodeKey = "node{$nodeId}";
             $label = "";
@@ -141,8 +146,8 @@ class FlowVisualizer
         if (!empty($flow['services'])) {
             $currentLevelNodes = [];
             foreach ($flow['services'] as $service) {
-                $serviceName = isset($service['class']) ? class_basename($service['class']) : ($service['name'] ?? 'Service');
-                $serviceType = $service['type'] ?? 'Service';
+                $serviceName = $this->escapeDotLabel(isset($service['class']) ? class_basename($service['class']) : ($service['name'] ?? 'Service'));
+                $serviceType = $this->escapeDotLabel($service['type'] ?? 'Service');
                 
                 $nodeKey = "node{$nodeId}";
                 $dot .= "    {$nodeKey} [label=\"⚙️ {$serviceType}\\n{$serviceName}\", fillcolor=\"#f39c12\", fontcolor=\"white\"];\n";
@@ -163,8 +168,8 @@ class FlowVisualizer
         if (!empty($flow['models'])) {
             $currentLevelNodes = [];
             foreach ($flow['models'] as $model) {
-                $modelName = isset($model['class']) ? class_basename($model['class']) : ($model['model'] ?? 'Model');
-                $operations = isset($model['operations']) ? implode(', ', array_slice($model['operations'], 0, 2)) : '';
+                $modelName = $this->escapeDotLabel(isset($model['class']) ? class_basename($model['class']) : ($model['model'] ?? 'Model'));
+                $operations = isset($model['operations']) ? $this->escapeDotLabel(implode(', ', array_slice($model['operations'], 0, 2))) : '';
                 
                 $nodeKey = "node{$nodeId}";
                 $label = "📊 Model\\n{$modelName}";
@@ -197,6 +202,11 @@ class FlowVisualizer
 
         $dot .= "}\n";
         return $dot;
+    }
+
+    private function escapeDotLabel(string $value): string
+    {
+        return str_replace(["\\", '"', "\r", "\n"], ["\\\\", '\\"', '', '\\n'], $value);
     }
 
     private function generateDependencyNodes(array $dependencies, int &$nodeCounter): array

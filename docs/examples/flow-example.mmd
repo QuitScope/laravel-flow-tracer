@@ -1,0 +1,14 @@
+graph TD
+    R0["🔗 Route: posts.store"]
+    M1["🛡️ web"]
+    M2["🛡️ auth"]
+    C3["🎯 PostController::store"]
+    S4["⚙️ Service: PostService"]
+    D5["📊 Post"]
+
+    %% Connections
+    R0 --> M1
+    M1 --> M2
+    M2 --> C3
+    C3 --> S4
+    C3 --> D5
