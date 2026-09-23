@@ -1,15 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - 2026-09-23
 
-- Default and `--export` paths now use `output_directory` from the config
-- `--export=png` is accepted
-- `--format` other than `table`/`json` is rejected
-- Quotes and backslashes in names no longer break the Graphviz output
-- Plain `$var->method()` calls are no longer listed as services
-- Models are no longer listed twice
-- Dev dependencies updated for Laravel 12 (Testbench 10, PHPUnit 11)
+First public release.
 
-## 1.0.0 - 2024-08-17
-
-First release: `flow:trace` for routes, URLs and controller actions, table and JSON output, PNG/SVG/DOT/Mermaid export via Graphviz.
+- `flow:trace` Artisan command for named routes, URLs and controller actions
+- Output as table or JSON
+- Diagram export as PNG, SVG, DOT (Graphviz) or Mermaid
+- Forward/backward dependency tracing, impact analysis, circular dependency check
+- Optional internal method analysis and deep tracing
+- Project statistics with `--stats`
